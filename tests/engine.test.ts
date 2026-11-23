@@ -41,6 +41,16 @@ describe("equipo de agentes en modo simulado", () => {
     }
   });
 
+  it("repetir la misma petición sobre una web que ya tiene la página también termina bien", async () => {
+    const first = memoryStore("Añade una página de contacto a esta web", templateFiles(), "simulado");
+    await runToEnd({ store: first.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
+    const second = memoryStore("Añade una página de contacto a esta web", first.site(), "simulado");
+    const r = await runToEnd({ store: second.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(second.site()["contacto.html"]).toMatch(/href="contacto.html" aria-current="page"/);
+    expect(hasErrors(runAutomaticChecks(second.site()))).toBe(false);
+  });
+
   it("funciona con peticiones que no reconoce (página genérica)", async () => {
     const m = memoryStore("Crea una sección de recetas caseras", templateFiles(), "simulado");
     const r = await runToEnd({ store: m.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });

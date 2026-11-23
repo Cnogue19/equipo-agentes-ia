@@ -75,7 +75,13 @@ function navLinks(html: string): string {
 }
 
 function addNavLink(html: string, page: string, titulo: string, current: boolean): string {
-  if (new RegExp(`href="${page}"`).test(navLinks(html))) return html;
+  if (new RegExp(`href="${page}"`).test(navLinks(html))) {
+    // El enlace ya existe (p. ej. de una petición anterior): en su propia página debe ir marcado.
+    if (!current) return html;
+    return html.replace(/(<nav[^>]*class="menu"[^>]*>[\s\S]*?<\/nav>)/, (nav) =>
+      nav.replace(new RegExp(`<a href="${page}"(?![^>]*aria-current)`), `<a href="${page}" aria-current="page"`),
+    );
+  }
   return html.replace(/(<nav[^>]*class="menu"[^>]*>[\s\S]*?)(\s*<\/nav>)/, `$1\n      <a href="${page}"${current ? ' aria-current="page"' : ""}>${titulo}</a>$2`);
 }
 
