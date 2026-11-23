@@ -83,6 +83,8 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 | CA18 (R8) | Una petición en curso se puede cancelar: los agentes se detienen, la web publicada no cambia y un paso que siguiera en marcha no puede reactivarla | `engine.test.ts` → «cancelar una petición…»; botón «Cancelar» en la interfaz; `POST /api/runs/:id/cancel` |
 | CA19 (R8) | Mientras la IA razona o escribe, la tarjeta del agente muestra la fase y el tiempo transcurrido | `llm.test.ts` → «informa de la fase de razonamiento…»; actividad «Razonando con <modelo>… N s» |
 | CA20 (R3, D7) | Un fallo puntual de la IA a mitad de una petición (respuesta cortada, JSON no válido) no la detiene: el agente reintenta el mismo paso hasta 3 veces seguidas sin gastar intentos de la tarea; si sigue fallando, la petición termina con el motivo | `engine.test.ts` → «fallos puntuales de la IA…» (2 tests); fallo detectado en una prueba real en producción |
+| CA21 (R2) | Develop modifica ficheros existentes con ediciones «buscar → reemplazar»; una edición cuyo fragmento no existe vuelve a Develop sin pasar por Testing | `engine.test.ts` → «ediciones puntuales de Develop…» (2 tests) |
+| CA22 (D2, D7) | Ninguna llamada a la IA supera su tiempo asignado aunque el modelo ya esté escribiendo: el stream se corta y se prueba otro modelo o se reintenta | `llm.test.ts` → «corta el stream si el modelo no termina a tiempo…» |
 
 ## 7. Fuera de alcance
 
@@ -93,7 +95,7 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 ## 8. Comprobación de que se cumple la especificación
 
 ```bash
-npm test             # 20 tests (CA1–CA5, CA8–CA12, CA18–CA20)
+npm test             # 23 tests (CA1–CA5, CA8–CA12, CA18–CA22)
 npm run typecheck && npm run lint && npm run build
 ```
 

@@ -10,7 +10,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { callClaude, ProviderUnavailableError } from "../src/lib/ai/llm";
 
-type Handler = (body: Record<string, unknown>) => { status: number; sse?: string[]; json?: unknown };
+type Handler = (body: Record<string, unknown>) => { status: number; sse?: string[]; json?: unknown; hang?: boolean };
 let handler: Handler;
 const bodies: Record<string, unknown>[] = [];
 let server: Server;
@@ -36,6 +36,12 @@ beforeAll(async () => {
       const body = JSON.parse(raw || "{}");
       bodies.push(body);
       const r = handler(body);
+      if (r.hang) {
+        // Empieza el stream y no lo termina nunca (modelo que se queda escribiendo).
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(sseMessage("{").slice(0, 2).join(""));
+        return;
+      }
       if (r.sse) {
         res.writeHead(r.status, { "content-type": "text/event-stream" });
         res.end(r.sse.join(""));
@@ -108,6 +114,13 @@ describe("callClaude (SDK de Anthropic)", () => {
   it("un 403 por falta de tarjeta/crédito se convierte en proveedor no disponible", async () => {
     handler = () => ({ status: 403, json: { error: { type: "customer_verification_required", message: "AI Gateway requires a valid credit card" } } });
     await expect(callClaude(client(), "m", "motor", req)).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  it("corta el stream si el modelo no termina a tiempo (aunque ya haya empezado a responder)", async () => {
+    handler = () => ({ status: 200, hang: true });
+    const t0 = Date.now();
+    await expect(callClaude(client(), "m", "motor", req, false, 400)).rejects.toThrow(/tiempo agotado/);
+    expect(Date.now() - t0).toBeLessThan(3000);
   });
 
   it("detecta respuestas cortadas por max_tokens", async () => {

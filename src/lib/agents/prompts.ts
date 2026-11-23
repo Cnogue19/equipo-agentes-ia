@@ -19,7 +19,16 @@ export const DevSchema = z.object({
   resumen: z.string().describe("Qué has cambiado y por qué, en 1-3 frases"),
   archivos: z
     .array(z.object({ ruta: z.string(), contenido: z.string().describe("Contenido COMPLETO del fichero") }))
-    .describe("Solo los ficheros nuevos o modificados"),
+    .describe("Ficheros NUEVOS, o existentes que reescribes casi por completo"),
+  ediciones: z
+    .array(
+      z.object({
+        ruta: z.string(),
+        buscar: z.string().describe("Fragmento EXACTO que existe una sola vez en el fichero actual"),
+        reemplazar: z.string().describe("Texto que sustituye al fragmento"),
+      }),
+    )
+    .describe("Cambios puntuales en ficheros existentes (preferible a reescribirlos)"),
 });
 
 export const TestSchema = z.object({
@@ -53,8 +62,10 @@ Tu trabajo: implementar UNA tarea que te asigna el Orquestador, modificando o cr
 Si Testing te devuelve fallos, corrígelos todos sin romper lo que ya funcionaba.
 
 Reglas:
-- Devuelve el contenido COMPLETO de cada fichero que crees o modifiques (no diffs, no "..." ni fragmentos).
-- Devuelve solo los ficheros que cambian.
+- Ficheros NUEVOS: van en "archivos", con su contenido COMPLETO (sin "..." ni fragmentos).
+- Ficheros EXISTENTES: usa "ediciones" (buscar → reemplazar). "buscar" debe copiarse EXACTO del fichero actual (mismos espacios y saltos de línea) y ser único en ese fichero. Ejemplo para añadir un enlace al menú: busca la línea del último enlace del menú y reemplázala por esa misma línea más el enlace nuevo.
+- Solo reescribe un fichero existente completo (en "archivos") si cambias la mayor parte de él.
+- No incluyas ficheros ni ediciones que no cambien nada.
 - Rutas relativas simples (letras, números, guiones, puntos, "/"), extensiones .html .css .js .svg .json .txt.
 - Mantén la misma cabecera, menú, pie y hoja de estilos en todas las páginas. Respeta el estilo visual existente.
 - HTML5 válido: <!DOCTYPE html>, <html lang="es">, <meta charset>, <meta name="viewport">, <title>.

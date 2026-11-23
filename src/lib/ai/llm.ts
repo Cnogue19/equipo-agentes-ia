@@ -78,20 +78,30 @@ export async function callClaude<T>(
   basic = false,
   timeoutMs?: number,
 ): Promise<LlmResult<T>> {
+  const t0 = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   try {
     const stream = client.messages.stream(
       {
-      model,
-      max_tokens: req.maxTokens,
-      system: req.system,
-      messages: [{ role: "user", content: req.prompt + schemaHint(req.schema) }],
-      // Salida estructurada (JSON Schema) + nivel de esfuerzo. En modo "basic" se omiten por si
-      // el intermediario (p. ej. la pasarela) no los admite; el esquema sigue en el prompt.
-      ...(basic ? {} : { output_config: { effort: req.effort, format: jsonFormat(req.schema) } }),
+        model,
+        max_tokens: req.maxTokens,
+        system: req.system,
+        messages: [{ role: "user", content: req.prompt + schemaHint(req.schema) }],
+        // Salida estructurada (JSON Schema) + nivel de esfuerzo. En modo "basic" se omiten por si
+        // el intermediario (p. ej. la pasarela) no los admite; el esquema sigue en el prompt.
+        ...(basic ? {} : { output_config: { effort: req.effort, format: jsonFormat(req.schema) } }),
       },
       timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined,
     );
-    const t0 = Date.now();
+    // El timeout del SDK solo cubre hasta recibir las cabeceras; si el modelo sigue escribiendo,
+    // se corta aquí el stream para no superar el límite de tiempo de la función de Vercel.
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        stream.abort();
+      }, timeoutMs);
+    }
     let chars = 0;
     let thinking = 0;
     const report = (fase: LlmProgress["fase"], caracteres: number) =>
@@ -112,7 +122,11 @@ export async function callClaude<T>(
     const data = req.schema.parse(extractJson(text));
     return { data, motor, tokensIn: msg.usage.input_tokens, tokensOut: msg.usage.output_tokens };
   } catch (e) {
-    if (!basic && e instanceof Anthropic.BadRequestError) return callClaude(client, model, motor, req, true, timeoutMs);
+    if (timedOut) throw new Error(`${motor}: sin terminar tras ${Math.round((timeoutMs ?? 0) / 1000)} s (tiempo agotado)`);
+    if (!basic && e instanceof Anthropic.BadRequestError) {
+      const remaining = timeoutMs ? timeoutMs - (Date.now() - t0) : undefined;
+      return callClaude(client, model, motor, req, true, remaining);
+    }
     if (
       e instanceof Anthropic.AuthenticationError ||
       e instanceof Anthropic.PermissionDeniedError ||
@@ -122,6 +136,8 @@ export async function callClaude<T>(
       throw new ProviderUnavailableError(`${motor}: ${e.message.slice(0, 300)}`);
     }
     throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

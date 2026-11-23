@@ -168,7 +168,11 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
       });
       await setAgent("testing", { estado: "esperando", actividad: `Esperando la entrega de la tarea ${n}` });
 
-      let output: { resumen: string; archivos: { ruta: string; contenido: string }[] };
+      let output: {
+        resumen: string;
+        archivos: { ruta: string; contenido: string }[];
+        ediciones?: { ruta: string; buscar: string; reemplazar: string }[];
+      };
       if (run.mode === "ia") {
         const fb = task.feedback?.length ? `\n\nFALLOS QUE TE HA DEVUELTO TESTING EN EL INTENTO ANTERIOR (corrígelos todos):\n${task.feedback.map((f) => `- ${f}`).join("\n")}` : "";
         const { result, reason } = await deps.llm({
@@ -199,10 +203,58 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
         }
         if (files[ruta] !== f.contenido) {
           files[ruta] = f.contenido;
-          changed.push(ruta);
+          if (!changed.includes(ruta)) changed.push(ruta);
+        }
+      }
+      // Ediciones puntuales (buscar → reemplazar): mucho menos texto que reescribir ficheros enteros.
+      const failedEdits: string[] = [];
+      for (const ed of (output.ediciones ?? []).slice(0, 40)) {
+        const ruta = ed.ruta.trim().replace(/^\.\//, "");
+        const current = files[ruta];
+        if (current === undefined || !isSafePath(ruta)) {
+          failedEdits.push(`[Edición] ${ruta}: el fichero no existe`);
+          continue;
+        }
+        const at = ed.buscar ? current.indexOf(ed.buscar) : -1;
+        if (at < 0) {
+          failedEdits.push(`[Edición] ${ruta}: no se encontró el fragmento a reemplazar «${ed.buscar.slice(0, 80)}»`);
+          continue;
+        }
+        const updated = current.slice(0, at) + ed.reemplazar + current.slice(at + ed.buscar.length);
+        if (updated.length > MAX_FILE_SIZE) {
+          rejected.push(ruta);
+          continue;
+        }
+        if (updated !== current) {
+          files[ruta] = updated;
+          if (!changed.includes(ruta)) changed.push(ruta);
         }
       }
       await store.patchRun(run.id, { files });
+      if (failedEdits.length) {
+        // Ediciones que no encajan con el código actual: se devuelven directamente a Develop.
+        await store.patchTask(task.id, { status: "corrigiendo", changed, feedback: failedEdits });
+        await store.addEvent(run.id, {
+          taskId: task.id,
+          agent: "develop",
+          kind: "entrega",
+          message: `${output.resumen || "Cambios entregados."} (${changed.length ? `ficheros: ${changed.join(", ")}` : "sin cambios en ficheros"})`,
+          data: { archivos: changed, rechazados: rejected, intento: attempt },
+        });
+        await store.addEvent(run.id, {
+          taskId: task.id,
+          agent: "sistema",
+          kind: "fallos",
+          message: `${failedEdits.length} edición(es) de Develop no se pudieron aplicar al código actual; vuelven a Develop.`,
+          data: { fallos: failedEdits },
+        });
+        await setAgent("develop", { estado: "esperando", actividad: `Corrigiendo ediciones de la tarea ${n}` });
+        if (attempt >= MAX_ATTEMPTS) {
+          await store.patchTask(task.id, { status: "bloqueada" });
+          return fail(run, deps, `La tarea «${task.title}» no se ha podido aplicar tras ${attempt} intentos.`);
+        }
+        return { status: "en_curso", done: false };
+      }
       await store.patchTask(task.id, { status: "en_pruebas", changed });
       await store.addEvent(run.id, {
         taskId: task.id,

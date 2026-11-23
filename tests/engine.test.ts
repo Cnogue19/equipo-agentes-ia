@@ -105,6 +105,50 @@ describe("fallos puntuales de la IA a mitad de una petición", () => {
   });
 });
 
+describe("ediciones puntuales de Develop (buscar → reemplazar)", () => {
+  const plan = { resumen: "", tareas: [{ titulo: "Menú", descripcion: "Añadir Contacto al menú", criterios: ["c"] }] };
+  const ok = (data: unknown) => ({ reason: "", result: { motor: "f", tokensIn: 1, tokensOut: 1, data } });
+  const navLine = '      <a href="productos.html">Productos</a>';
+
+  it("aplica ediciones en varias páginas sin reescribirlas", async () => {
+    const m = memoryStore("Añade contacto al menú", templateFiles(), "ia");
+    const edicion = (ruta: string, line: string) => ({ ruta, buscar: line, reemplazar: `${line}\n      <a href="index.html#contacto">Contacto</a>` });
+    const llm = (async (req: LlmRequest<unknown>) => {
+      if (req.system.includes("ORQUESTADOR")) return ok(plan);
+      if (req.system.includes("DEVELOP"))
+        return ok({ resumen: "Enlace añadido", archivos: [], ediciones: [edicion("index.html", navLine), edicion("productos.html", '      <a href="productos.html" aria-current="page">Productos</a>')] });
+      return ok({ observaciones: "", criterios: [{ criterio: "c", cumple: true, motivo: "ok" }] });
+    }) as unknown as Deps["llm"];
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(m.site()["index.html"]).toContain('<a href="index.html#contacto">Contacto</a>');
+    expect(m.site()["productos.html"]).toContain('<a href="index.html#contacto">Contacto</a>');
+    expect(m.tasks[0].changed).toEqual(["index.html", "productos.html"]);
+  });
+
+  it("si un fragmento no existe, la edición vuelve a Develop sin pasar por Testing", async () => {
+    const m = memoryStore("Añade contacto al menú", templateFiles(), "ia");
+    let devCalls = 0;
+    let testingCalls = 0;
+    const llm = (async (req: LlmRequest<unknown>) => {
+      if (req.system.includes("ORQUESTADOR")) return ok(plan);
+      if (req.system.includes("DEVELOP")) {
+        devCalls++;
+        const buscar = devCalls === 1 ? "<nav>NO EXISTE</nav>" : navLine;
+        return ok({ resumen: "", archivos: [], ediciones: [{ ruta: "index.html", buscar, reemplazar: `${navLine}\n      <a href="#">X</a>` }] });
+      }
+      testingCalls++;
+      return ok({ observaciones: "", criterios: [{ criterio: "c", cumple: true, motivo: "ok" }] });
+    }) as unknown as Deps["llm"];
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(devCalls).toBe(2);
+    expect(testingCalls).toBe(1);
+    expect(m.events.some((e) => e.kind === "fallos" && e.agent === "sistema")).toBe(true);
+    expect(m.tasks[0].attempts).toBe(2);
+  });
+});
+
 describe("cancelar una petición", () => {
   it("detiene la ejecución, no publica cambios y un paso posterior no la reactiva", async () => {
     const m = memoryStore("Añade una página de contacto a esta web", templateFiles(), "simulado");

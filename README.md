@@ -32,6 +32,8 @@ step():  Orquestador planifica ─► [por cada tarea]
 - **Testing tiene dos capas**: comprobaciones automáticas deterministas (`src/lib/agents/checks.ts`: HTML bien formado con *parse5*, enlaces rotos, `alt` en imágenes, `<label>` en formularios, ids duplicados, sintaxis JS con *acorn*, llaves CSS, páginas huérfanas) + evaluación de cada criterio de aceptación por el modelo. Una tarea solo pasa si **no hay errores automáticos y se cumplen todos los criterios**; si no, los fallos concretos vuelven a Develop.
 - **Salida estructurada**: cada agente responde JSON validado con Zod (`src/lib/agents/prompts.ts`), usando la salida estructurada de la API de Claude.
 - **Progreso en vivo de la IA**: mientras un modelo razona, la tarjeta del agente muestra «Razonando con <modelo>… N s»; cuando escribe, los caracteres generados.
+- **Ediciones puntuales**: Develop crea los ficheros nuevos completos, pero modifica los existentes con ediciones «buscar → reemplazar». Así, añadir un enlace al menú de 5 páginas son 5 líneas y no 5 páginas enteras (más rápido y barato). Si un fragmento no encaja con el código actual, la edición vuelve directamente a Develop.
+- **Tiempo máximo por llamada**: si un modelo no termina a tiempo, se corta el stream (aunque ya haya empezado a escribir) y se prueba el siguiente modelo o se reintenta, sin superar el límite de 300 s de Vercel.
 - **Reintentos ante fallos puntuales de la IA**: si un modelo devuelve una respuesta cortada o no válida a mitad de una petición, el agente reintenta el mismo paso (hasta 3 veces seguidas, sin gastar intentos de la tarea) y queda registrado en la actividad.
 - **Cancelar**: una petición en curso se puede cancelar desde la interfaz; los agentes se detienen y la web publicada no cambia (un paso que siguiera en marcha ya no puede reactivarla).
 - **Vista previa aislada**: la web generada se muestra en un `iframe` con `sandbox` (y CSP `sandbox` si se abre directamente), con CSS/JS/SVG incrustados; su código no puede leer la sesión ni llamar a la API.
@@ -72,7 +74,7 @@ npm run dev
 Tests y comprobaciones:
 
 ```bash
-npm test            # 20 tests: comprobaciones de Testing, ciclo completo de los agentes, SDK de Claude contra un servidor falso
+npm test            # 23 tests: comprobaciones de Testing, ciclo completo de los agentes, SDK de Claude contra un servidor falso
 npm run typecheck && npm run lint && npm run build
 ```
 
@@ -83,8 +85,8 @@ Todo el proyecto se ha programado con **Claude Code** (app de escritorio, modelo
 1. **Lectura del enunciado y plan**: a partir de una captura del email, Claude Code extrajo los requisitos y mantuvo una lista de tareas visible (revisar herramientas → arquitectura → código → interfaz → BD y despliegue → GitHub → pruebas en producción → informe).
 2. **Infraestructura desde la terminal**: instaló Vercel CLI y GitHub CLI, creó el proyecto de Vercel, aprovisionó Neon desde Vercel Marketplace (`vercel integration add neon`), generó `SESSION_SECRET` y lo guardó como variable cifrada de Vercel sin mostrarlo nunca, y creó el repositorio en GitHub. Los inicios de sesión y la aceptación de términos los hizo la persona usuaria en su navegador.
 3. **Documentación antes de programar**: como Next.js 16 tiene cambios incompatibles, Claude Code leyó la documentación incluida en `node_modules/next/dist/docs` (Route Handlers, `RouteContext`, `maxDuration`, Cache Components) y la del AI Gateway y del SDK de Anthropic antes de escribir código.
-4. **Programación y tests**: escribió el motor, los agentes, la interfaz y 20 tests con Vitest (incluido un servidor local que imita la API de Claude). Los tests encontraron un fallo real (el SDK parseaba el JSON antes de comprobar `max_tokens`), que se corrigió.
+4. **Programación y tests**: escribió el motor, los agentes, la interfaz y 23 tests con Vitest (incluido un servidor local que imita la API de Claude). Los tests encontraron un fallo real (el SDK parseaba el JSON antes de comprobar `max_tokens`), que se corrigió.
 5. **Verificación en navegador**: arrancó la app en local y la probó con el navegador integrado de Claude Code (login, ejecución en directo, vista previa, código). Así detectó y corrigió un problema de maquetación y que la vista previa necesitaba incrustar CSS/JS.
-6. **Pruebas en producción**: tras desplegar, ejecutó peticiones completas contra la URL pública y desde la propia interfaz. Destaparon dos fallos que no salían en local: repetir una petición sobre una web que ya tenía la página bloqueaba una tarea, y un fallo puntual del modelo gratuito (respuesta cortada) detenía toda la petición. Ambos se corrigieron con su test de regresión.
+6. **Pruebas en producción**: tras desplegar, ejecutó peticiones completas contra la URL pública y desde la propia interfaz. Destaparon dos fallos que no salían en local: repetir una petición sobre una web que ya tenía la página bloqueaba una tarea, un fallo puntual del modelo gratuito (respuesta cortada) detenía toda la petición, y un paso de Develop que reescribía 5 páginas superaba el límite de tiempo de Vercel. Se corrigieron con reintentos, corte del stream por tiempo y ediciones puntuales, cada uno con su test.
 
 `CLAUDE.md` recoge las instrucciones del proyecto para futuras sesiones de Claude Code.
