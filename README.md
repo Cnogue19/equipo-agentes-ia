@@ -10,6 +10,7 @@ En pantalla se ve en tiempo real **qué hace cada agente** (estado, actividad, m
 
 - **App:** https://equipo-agentes-ia-hazel.vercel.app (requiere usuario de prueba)
 - **Stack:** Next.js 16 (App Router, TypeScript) · Neon Postgres (plan gratuito) · Vercel (plan Hobby) · SDK oficial de Anthropic (Claude) · Tailwind CSS · Vitest
+- **Despliegue continuo:** el repositorio está conectado a Vercel; cada `git push` a `master` se publica automáticamente en producción.
 
 ## Cómo funciona
 
