@@ -62,11 +62,18 @@ async function gatewayToken(): Promise<string | null> {
   }
 }
 
-async function callClaude<T>(
+/** JSON Schema del esquema Zod (sin el auto-parseo del SDK: el resultado se valida aquí, tras mirar stop_reason). */
+function jsonFormat<T>(schema: z.ZodType<T>) {
+  const { type, schema: jsonSchema } = zodOutputFormat(schema);
+  return { type, schema: jsonSchema };
+}
+
+export async function callClaude<T>(
   client: Anthropic,
   model: string,
   motor: string,
   req: LlmRequest<T>,
+  basic = false,
 ): Promise<LlmResult<T>> {
   try {
     const stream = client.messages.stream({
@@ -74,7 +81,9 @@ async function callClaude<T>(
       max_tokens: req.maxTokens,
       system: req.system,
       messages: [{ role: "user", content: req.prompt + schemaHint(req.schema) }],
-      output_config: { effort: req.effort, format: zodOutputFormat(req.schema) },
+      // Salida estructurada (JSON Schema) + nivel de esfuerzo. En modo "basic" se omiten por si
+      // el intermediario (p. ej. la pasarela) no los admite; el esquema sigue en el prompt.
+      ...(basic ? {} : { output_config: { effort: req.effort, format: jsonFormat(req.schema) } }),
     });
     let chars = 0;
     stream.on("text", (delta) => {
@@ -88,6 +97,7 @@ async function callClaude<T>(
     const data = req.schema.parse(extractJson(text));
     return { data, motor, tokensIn: msg.usage.input_tokens, tokensOut: msg.usage.output_tokens };
   } catch (e) {
+    if (!basic && e instanceof Anthropic.BadRequestError) return callClaude(client, model, motor, req, true);
     if (
       e instanceof Anthropic.AuthenticationError ||
       e instanceof Anthropic.PermissionDeniedError ||

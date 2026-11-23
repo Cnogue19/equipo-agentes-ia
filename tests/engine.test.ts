@@ -51,6 +51,18 @@ describe("equipo de agentes en modo simulado", () => {
     expect(hasErrors(runAutomaticChecks(second.site()))).toBe(false);
   });
 
+  it("genera contenido real: 5 preguntas frecuentes y una tabla de precios", async () => {
+    const faq = memoryStore("Añade una página de preguntas frecuentes", templateFiles(), "simulado");
+    await runToEnd({ store: faq.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
+    expect(faq.run.status).toBe("completada");
+    expect(faq.site()["preguntas-frecuentes.html"].match(/<details>/g)).toHaveLength(5);
+    const precios = memoryStore("Añade una página de precios", templateFiles(), "simulado");
+    await runToEnd({ store: precios.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
+    expect(precios.run.status).toBe("completada");
+    expect(precios.site()["precios.html"]).toContain("<table>");
+    expect(hasErrors(runAutomaticChecks(precios.site()))).toBe(false);
+  });
+
   it("funciona con peticiones que no reconoce (página genérica)", async () => {
     const m = memoryStore("Crea una sección de recetas caseras", templateFiles(), "simulado");
     const r = await runToEnd({ store: m.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });

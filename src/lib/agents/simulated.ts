@@ -11,13 +11,42 @@ export type PlannedTask = { titulo: string; descripcion: string; criterios: stri
 export type Plan = { resumen: string; tareas: PlannedTask[] };
 export type DevOutput = { resumen: string; archivos: { ruta: string; contenido: string }[] };
 
-type Feature = { slug: string; titulo: string; form: boolean; intro: string };
+type Feature = { slug: string; titulo: string; form: boolean; intro: string; contenido?: string };
 
 const FEATURES: { re: RegExp; f: Feature }[] = [
   { re: /contact/i, f: { slug: "contacto", titulo: "Contacto", form: true, intro: "Escríbenos y te responderemos en menos de 24 horas." } },
-  { re: /precio|tarifa/i, f: { slug: "precios", titulo: "Precios", form: false, intro: "Precios actualizados de nuestros productos." } },
+  { re: /precio|tarifa/i, f: { slug: "precios", titulo: "Precios", form: false, intro: "Precios actualizados de nuestros productos.", contenido: `      <table>
+        <caption>Precios con IVA incluido</caption>
+        <thead><tr><th scope=\"col\">Producto</th><th scope=\"col\">Precio</th></tr></thead>
+        <tbody>
+          <tr><td>Hogaza de masa madre</td><td>4,50 €</td></tr>
+          <tr><td>Barra rústica</td><td>1,20 €</td></tr>
+          <tr><td>Croissant de mantequilla</td><td>1,40 €</td></tr>
+          <tr><td>Tarta de queso (encargo)</td><td>22,00 €</td></tr>
+        </tbody>
+      </table>
+      <p class=\"aviso-alergenos\">Aviso de alérgenos: nuestros productos pueden contener trazas de gluten, huevo, leche y frutos secos.</p>` } },
   { re: /galer|foto/i, f: { slug: "galeria", titulo: "Galería", form: false, intro: "Algunas imágenes de nuestro obrador." } },
-  { re: /faq|pregunta/i, f: { slug: "preguntas-frecuentes", titulo: "Preguntas frecuentes", form: false, intro: "Respuestas a las dudas más habituales." } },
+  { re: /faq|pregunta/i, f: { slug: "preguntas-frecuentes", titulo: "Preguntas frecuentes", form: false, intro: "Respuestas a las dudas más habituales.", contenido: `      <details>
+        <summary>¿Hacéis pan sin gluten?</summary>
+        <p>Sí, los viernes horneamos hogazas sin gluten en un obrador separado.</p>
+      </details>
+      <details>
+        <summary>¿Puedo encargar una tarta?</summary>
+        <p>Claro, con 48 horas de antelación en tienda o por teléfono.</p>
+      </details>
+      <details>
+        <summary>¿Usáis masa madre?</summary>
+        <p>Todo nuestro pan se elabora con masa madre natural y fermentación de 24 horas.</p>
+      </details>
+      <details>
+        <summary>¿Tenéis opciones veganas?</summary>
+        <p>La barra rústica y la hogaza de centeno son 100% vegetales.</p>
+      </details>
+      <details>
+        <summary>¿Aceptáis pago con tarjeta?</summary>
+        <p>Sí, aceptamos tarjeta, efectivo y pago con el móvil.</p>
+      </details>` } },
   { re: /nosotros|quien|quién|historia|sobre/i, f: { slug: "nosotros", titulo: "Sobre nosotros", form: false, intro: "Tres generaciones horneando pan en el barrio." } },
   { re: /horario|ubicaci|mapa|d[oó]nde/i, f: { slug: "donde-estamos", titulo: "Dónde estamos", form: false, intro: "Ven a vernos a la calle Mayor 12." } },
   { re: /blog|noticia/i, f: { slug: "noticias", titulo: "Noticias", form: false, intro: "Novedades de la panadería." } },
@@ -107,7 +136,7 @@ function pageFromTemplate(files: Files, f: Feature, bug: boolean): string {
     : `    <section class="${f.slug}">
       <h1>${f.titulo}</h1>
       <p>${f.intro}</p>
-      <img src="espiga.svg" ${bug ? "" : 'alt="Ilustración de una espiga de trigo" '}width="120" height="120">
+${f.contenido ? `${f.contenido}\n` : ""}      <img src="espiga.svg" ${bug ? "" : 'alt="Ilustración de una espiga de trigo" '}width="120" height="120">
     </section>`;
   return `<!DOCTYPE html>
 <html lang="es">
