@@ -110,7 +110,13 @@ export default function Dashboard({ user }: { user: User }) {
           const r = await fetch(`/api/runs/${runId}/step`, { method: "POST" });
           const d = (await r.json().catch(() => ({}))) as { done?: boolean; busy?: boolean };
           if (cancelled) break;
-          if (d.done || !r.ok) break;
+          if (d.done) break;
+          // Errores del servidor (p. ej. 504 si un paso se pasó de tiempo): se reintenta el paso.
+          if (r.status >= 500) {
+            await wait(3000);
+            continue;
+          }
+          if (!r.ok) break; // 4xx: sesión caducada, no encontrada…
           if (d.busy) await wait(2500);
         } catch {
           await wait(3000);
