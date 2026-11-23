@@ -201,3 +201,9 @@ export async function acquireLock(runId: number, userId: number): Promise<boolea
 export async function releaseLock(runId: number) {
   await sql()`UPDATE runs SET lock_until = NULL WHERE id = ${runId}`;
 }
+
+/** Estado de una ejecución del usuario (o null si no existe). */
+export async function runStatus(runId: number, userId: number): Promise<string | null> {
+  const rows = await sql()`SELECT status FROM runs WHERE id = ${runId} AND user_id = ${userId}`;
+  return rows[0] ? (rows[0].status as string) : null;
+}
