@@ -20,6 +20,8 @@ export type LlmRequest<T> = {
   schema: z.ZodType<T>;
   effort: "low" | "medium" | "high";
   maxTokens: number;
+  /** Tiempo máximo total para esta llamada (por defecto, el presupuesto de un paso). */
+  budgetMs?: number;
   /** Se llama mientras el modelo trabaja: si está razonando o escribiendo, caracteres y segundos. */
   onProgress?: (p: LlmProgress) => void;
 };
@@ -172,7 +174,7 @@ const providers: Provider[] = [
       if (!token) throw new ProviderUnavailableError("gateway: sin token OIDC ni AI_GATEWAY_API_KEY");
       const client = new Anthropic({ apiKey: token, baseURL: GATEWAY_URL, maxRetries: 0 });
       // Presupuesto de tiempo por paso: la función de Vercel se corta a los 300 s.
-      const deadline = Date.now() + GATEWAY_BUDGET_MS;
+      const deadline = Date.now() + (req.budgetMs ?? GATEWAY_BUDGET_MS);
       const models = gatewayModels().filter((m) => (modelUnavailable.get(m) ?? 0) <= Date.now());
       const reasons: string[] = [];
       for (const [i, model] of models.entries()) {
@@ -260,30 +262,44 @@ export type EngineInfo = {
 };
 
 const probedAt = new Map<string, number>();
+const probing = new Map<string, Promise<void>>();
 
-/** Prueba rápida (cacheada 10 min) de que el proveedor responde: una llamada mínima al modelo. */
-async function probe(p: Provider) {
-  const last = probedAt.get(p.id) ?? 0;
-  if (Date.now() - last < 10 * 60_000) return;
+/**
+ * Prueba rápida (cacheada 10 min) de que el proveedor responde: una llamada mínima al modelo,
+ * con un presupuesto de tiempo corto. Solo marca el proveedor como no disponible si la cuenta no
+ * tiene acceso; si el modelo simplemente va lento, se sigue considerando disponible.
+ */
+function probe(p: Provider): Promise<void> {
+  const running = probing.get(p.id);
+  if (running) return running;
+  if (Date.now() - (probedAt.get(p.id) ?? 0) < 10 * 60_000) return Promise.resolve();
   probedAt.set(p.id, Date.now());
-  try {
-    await p.call({
+  const task = p
+    .call({
       system: "Responde solo con el JSON pedido.",
       prompt: 'Devuelve {"ok": true}',
       schema: z.object({ ok: z.boolean() }),
       effort: "low",
-      maxTokens: 400,
-    });
-    disabledUntil.delete(p.id);
-  } catch (e) {
-    const reason = e instanceof Error ? e.message.slice(0, 300) : String(e);
-    disabledUntil.set(p.id, { until: Date.now() + 10 * 60_000, reason });
-  }
+      maxTokens: 3000,
+      budgetMs: 30_000,
+    })
+    .then(() => {
+      disabledUntil.delete(p.id);
+    })
+    .catch((e) => {
+      if (e instanceof ProviderUnavailableError) {
+        disabledUntil.set(p.id, { until: Date.now() + 10 * 60_000, reason: e.message.slice(0, 300) });
+      }
+    })
+    .finally(() => probing.delete(p.id));
+  probing.set(p.id, task);
+  return task;
 }
 
-export async function engineInfo(): Promise<EngineInfo> {
+/** Estado del motor de IA. No hace esperar más de unos segundos a la pantalla. */
+export async function engineInfo(maxWaitMs = 5000): Promise<EngineInfo> {
   const list = enabledProviders();
-  await Promise.all(list.map(probe));
+  await Promise.race([Promise.all(list.map(probe)), new Promise((r) => setTimeout(r, maxWaitMs))]);
   const now = Date.now();
   return {
     modo: process.env.AI_ENGINE || "auto",
@@ -291,7 +307,8 @@ export async function engineInfo(): Promise<EngineInfo> {
       const d = disabledUntil.get(p.id);
       const disponible = !(d && d.until > now);
       const nombre = p.id === "gateway" && disponible && lastGatewayModel ? `${p.label} · ${lastGatewayModel}` : p.label;
-      return { id: p.id, nombre, disponible, estado: disponible ? "disponible" : `no disponible: ${d!.reason}` };
+      const estado = !disponible ? `no disponible: ${d!.reason}` : probing.has(p.id) ? "comprobando…" : "disponible";
+      return { id: p.id, nombre, disponible, estado };
     }),
   };
 }

@@ -104,9 +104,28 @@ export async function resetSite(userId: number) {
   await sql()`UPDATE sites SET files = ${JSON.stringify(templateFiles())}::jsonb, updated_at = now() WHERE user_id = ${userId}`;
 }
 
+/**
+ * Marca como detenidas las peticiones del usuario que llevan más de 20 minutos sin ninguna
+ * actividad (p. ej. se cerró la pestaña a mitad). Así no se quedan «En curso» para siempre ni
+ * impiden lanzar otra. Un paso en marcha (bloqueo activo) nunca se considera abandonado.
+ */
+export async function expireStaleRuns(userId: number) {
+  const rows = await sql()`UPDATE runs r SET status = 'fallida', finished_at = now(),
+      error = 'Detenida: sin actividad durante más de 20 minutos (se cerró la pestaña a mitad).'
+    WHERE r.user_id = ${userId} AND r.status IN ('pendiente', 'planificando', 'en_curso')
+      AND (r.lock_until IS NULL OR r.lock_until < now())
+      AND GREATEST(r.created_at, COALESCE((SELECT max(e.created_at) FROM events e WHERE e.run_id = r.id), r.created_at))
+          < now() - interval '20 minutes'
+    RETURNING r.id`;
+  for (const row of rows) {
+    await dbStore.addEvent(Number(row.id), { agent: "sistema", kind: "error", message: "Petición detenida por falta de actividad (más de 20 minutos). La web publicada no se ha modificado." });
+  }
+}
+
 export async function hasActiveRun(userId: number): Promise<boolean> {
-  const rows = await sql()`SELECT 1 FROM runs WHERE user_id = ${userId} AND status IN ('pendiente','planificando','en_curso')
-    AND created_at > now() - interval '30 minutes' LIMIT 1`;
+  await expireStaleRuns(userId);
+  const rows = await sql()`SELECT 1 FROM runs WHERE user_id = ${userId}
+    AND status IN ('pendiente', 'planificando', 'en_curso') LIMIT 1`;
   return rows.length > 0;
 }
 
@@ -127,6 +146,7 @@ export async function createRun(userId: number, request: string, mode: "ia" | "s
 }
 
 export async function listRuns(userId: number) {
+  await expireStaleRuns(userId);
   const rows = await sql()`SELECT id, request, status, mode, created_at, finished_at,
       (SELECT count(*)::int FROM tasks t WHERE t.run_id = runs.id) AS total,
       (SELECT count(*)::int FROM tasks t WHERE t.run_id = runs.id AND t.status = 'hecha') AS hechas
@@ -191,7 +211,7 @@ export async function getRunFiles(runId: number, userId: number) {
 
 /** Bloqueo para que solo un proceso avance una ejecución a la vez. */
 export async function acquireLock(runId: number, userId: number): Promise<boolean> {
-  const rows = await sql()`UPDATE runs SET lock_until = now() + interval '5 minutes'
+  const rows = await sql()`UPDATE runs SET lock_until = now() + interval '310 seconds'
     WHERE id = ${runId} AND user_id = ${userId} AND status NOT IN ('completada','fallida')
       AND (lock_until IS NULL OR lock_until < now())
     RETURNING id`;

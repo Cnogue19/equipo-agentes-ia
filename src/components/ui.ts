@@ -67,3 +67,11 @@ export function fecha(iso: string) {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : d.toLocaleString("es-ES", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
+
+/** Duración legible entre dos instantes (o hasta ahora si no ha terminado). */
+export function duracion(desde: string, hasta: string | null, ahora: number) {
+  const ms = (hasta ? new Date(hasta).getTime() : ahora) - new Date(desde).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+}

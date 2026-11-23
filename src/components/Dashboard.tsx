@@ -10,7 +10,7 @@ import TaskBoard from "./TaskBoard";
 import ActivityLog from "./ActivityLog";
 import CodeView from "./CodeView";
 import Preview from "./Preview";
-import { ACTIVE_RUN, RUN_STATUS, fecha } from "./ui";
+import { ACTIVE_RUN, RUN_STATUS, duracion, fecha } from "./ui";
 
 type RunState = {
   run: Omit<Run, "agents"> & { agents: AgentsState; mode: string; ocupado: boolean; ficheros: string[] };
@@ -83,6 +83,24 @@ export default function Dashboard({ user }: { user: User }) {
 
   const status = state?.run.status;
   const active = Boolean(status && ACTIVE_RUN.includes(status));
+
+  // Reloj para mostrar la duración mientras la petición está en marcha.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  // Estado en el título de la pestaña (útil si se deja trabajando en segundo plano).
+  const tasksDone = state?.tasks.filter((t) => t.status === "hecha").length ?? 0;
+  const tasksTotal = state?.tasks.length ?? 0;
+  useEffect(() => {
+    const base = "Equipo de agentes IA";
+    if (!status) document.title = base;
+    else if (ACTIVE_RUN.includes(status)) document.title = `⏳ ${tasksDone}/${tasksTotal || "?"} · ${base}`;
+    else document.title = `${status === "completada" ? "✓ Completada" : "✗ Detenida"} · ${base}`;
+  }, [status, tasksDone, tasksTotal]);
 
   // Estado de la ejecución seleccionada; en tiempo real (cada 1,2 s) mientras los agentes trabajan.
   useEffect(() => {
@@ -290,7 +308,10 @@ export default function Dashboard({ user }: { user: User }) {
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuemin={0} aria-valuemax={tasks.length || 1} aria-valuenow={done} aria-label="Tareas completadas">
                 <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-500 transition-all" style={{ width: `${tasks.length ? (done / tasks.length) * 100 : active ? 5 : 0}%` }} />
               </div>
-              <p className="mt-1 text-xs text-slate-500">{done} de {tasks.length || "?"} tareas terminadas y verificadas</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {done} de {tasks.length || "?"} tareas terminadas y verificadas · Duración:{" "}
+                {duracion(state.run.created_at, state.run.finished_at, now)}
+              </p>
               {state.run.error && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">{state.run.error}</p>}
             </section>
           ) : (

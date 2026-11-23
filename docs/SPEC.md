@@ -85,6 +85,8 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 | CA20 (R3, D7) | Un fallo puntual de la IA a mitad de una petición (respuesta cortada, JSON no válido) no la detiene: el agente reintenta el mismo paso hasta 3 veces seguidas sin gastar intentos de la tarea; si sigue fallando, la petición termina con el motivo | `engine.test.ts` → «fallos puntuales de la IA…» (2 tests); fallo detectado en una prueba real en producción |
 | CA21 (R2) | Develop modifica ficheros existentes con ediciones «buscar → reemplazar»; una edición cuyo fragmento no existe vuelve a Develop sin pasar por Testing | `engine.test.ts` → «ediciones puntuales de Develop…» (2 tests) |
 | CA22 (D2, D7) | Ninguna llamada a la IA supera su tiempo asignado aunque el modelo ya esté escribiendo: el stream se corta y se prueba otro modelo o se reintenta | `llm.test.ts` → «corta el stream si el modelo no termina a tiempo…» |
+| CA23 (D2, D3) | Una petición sin actividad durante más de 20 minutos (y sin ningún paso en marcha) se marca como detenida, no bloquea nuevas peticiones y la web publicada no cambia | `src/lib/repo.ts` → `expireStaleRuns`; consulta validada contra la base de datos |
+| CA24 (R8) | El panel muestra la duración de cada petición y el título de la pestaña refleja su progreso | `Dashboard` (verificado en navegador) |
 
 ## 7. Fuera de alcance
 

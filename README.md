@@ -35,6 +35,9 @@ step():  Orquestador planifica ─► [por cada tarea]
 - **Ediciones puntuales**: Develop crea los ficheros nuevos completos, pero modifica los existentes con ediciones «buscar → reemplazar». Así, añadir un enlace al menú de 5 páginas son 5 líneas y no 5 páginas enteras (más rápido y barato). Si un fragmento no encaja con el código actual, la edición vuelve directamente a Develop.
 - **Tiempo máximo por llamada**: si un modelo no termina a tiempo, se corta el stream (aunque ya haya empezado a escribir) y se prueba el siguiente modelo o se reintenta, sin superar el límite de 300 s de Vercel.
 - **Reintentos ante fallos puntuales de la IA**: si un modelo devuelve una respuesta cortada o no válida a mitad de una petición, el agente reintenta el mismo paso (hasta 3 veces seguidas, sin gastar intentos de la tarea) y queda registrado en la actividad.
+- **Peticiones abandonadas**: si se cierra la pestaña a mitad, la petición se retoma al volver a abrir la app; si pasan más de 20 minutos sin actividad, se marca como detenida para que no quede «En curso» para siempre ni bloquee nuevas peticiones.
+- **Duración y título de la pestaña**: el panel muestra cuánto lleva cada petición y el título de la pestaña indica el progreso (⏳ 1/3, ✓ Completada), útil porque con IA real tarda varios minutos.
+- **Comprobación de la IA sin esperas**: el estado del motor se comprueba en segundo plano con un tiempo máximo corto, así el panel carga en segundos aunque el modelo gratuito vaya lento.
 - **Cancelar**: una petición en curso se puede cancelar desde la interfaz; los agentes se detienen y la web publicada no cambia (un paso que siguiera en marcha ya no puede reactivarla).
 - **Vista previa aislada**: la web generada se muestra en un `iframe` con `sandbox` (y CSP `sandbox` si se abre directamente), con CSS/JS/SVG incrustados; su código no puede leer la sesión ni llamar a la API.
 
