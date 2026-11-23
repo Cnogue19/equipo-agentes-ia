@@ -1,0 +1,98 @@
+import { describe, expect, it } from "vitest";
+import { step, type Deps } from "../src/lib/engine";
+import { templateFiles } from "../src/lib/site-template";
+import { hasErrors, runAutomaticChecks } from "../src/lib/agents/checks";
+import type { LlmRequest } from "../src/lib/ai/llm";
+import { memoryStore } from "./memory-store";
+
+const noSleep = async () => {};
+
+async function runToEnd(deps: Deps, max = 60) {
+  for (let i = 0; i < max; i++) {
+    const r = await step(1, deps);
+    if (r.done) return r;
+  }
+  throw new Error("No terminó");
+}
+
+describe("equipo de agentes en modo simulado", () => {
+  it("«Añade una página de contacto»: planifica, desarrolla, detecta fallos, corrige y termina", async () => {
+    const m = memoryStore("Añade una página de contacto a esta web", templateFiles(), "simulado");
+    const llm = async () => ({ result: null, reason: "sin IA" });
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+
+    expect(r.status).toBe("completada");
+    expect(m.tasks).toHaveLength(3);
+    expect(m.tasks.every((t) => t.status === "hecha")).toBe(true);
+    // Testing devolvió fallos al menos una vez y Develop los corrigió
+    expect(m.events.some((e) => e.agent === "testing" && e.kind === "fallos")).toBe(true);
+    expect(m.tasks[0].attempts).toBe(2);
+    expect(m.tasks[1].attempts).toBe(2);
+    // La web final tiene la página, enlazada desde todas las páginas, y pasa las comprobaciones
+    const site = m.site();
+    expect(site["contacto.html"]).toContain("<form");
+    for (const p of ["index.html", "productos.html", "contacto.html"]) expect(site[p]).toContain('href="contacto.html"');
+    expect(site["script.js"]).toContain('addEventListener("submit"');
+    expect(hasErrors(runAutomaticChecks(site))).toBe(false);
+    // Los tres agentes participaron y quedaron en estado terminado
+    for (const id of ["orquestador", "develop", "testing"] as const) {
+      expect(m.events.some((e) => e.agent === id)).toBe(true);
+      expect(m.run.agents[id].estado).toBe("terminado");
+    }
+  });
+
+  it("funciona con peticiones que no reconoce (página genérica)", async () => {
+    const m = memoryStore("Crea una sección de recetas caseras", templateFiles(), "simulado");
+    const r = await runToEnd({ store: m.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(Object.keys(m.site()).some((p) => p.startsWith("recetas"))).toBe(true);
+  });
+});
+
+describe("equipo de agentes con IA (modelo falso)", () => {
+  it("usa las respuestas del modelo y repite Develop→Testing hasta que pasa", async () => {
+    const m = memoryStore("Añade una página de contacto", templateFiles(), "ia");
+    let testingCalls = 0;
+    const llm = (async (req: LlmRequest<unknown>) => {
+      const motor = "modelo-falso";
+      if (req.system.includes("ORQUESTADOR")) {
+        return { reason: "", result: { motor, tokensIn: 10, tokensOut: 5, data: { resumen: "Una tarea", tareas: [{ titulo: "Crear contacto.html", descripcion: "Página de contacto", criterios: ["Existe contacto.html con formulario"] }] } } };
+      }
+      if (req.system.includes("DEVELOP")) {
+        const html = templateFiles()["index.html"].replace("<title>Panadería La Espiga · Pan artesano</title>", "<title>Contacto</title>");
+        return { reason: "", result: { motor, tokensIn: 10, tokensOut: 5, data: { resumen: "Hecho", archivos: [{ ruta: "contacto.html", contenido: html }] } } };
+      }
+      testingCalls++;
+      const cumple = testingCalls > 1; // la primera revisión falla
+      return { reason: "", result: { motor, tokensIn: 10, tokensOut: 5, data: { observaciones: "", criterios: [{ criterio: "x", cumple, motivo: cumple ? "ok" : "falta el formulario" }] } } };
+    }) as unknown as Deps["llm"];
+
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(testingCalls).toBe(2);
+    expect(m.tasks[0].attempts).toBe(2);
+    expect(m.events.find((e) => e.kind === "fallos")?.data).toMatchObject({ fallos: [expect.stringContaining("falta el formulario")] });
+    expect(m.run.agents.develop.llamadas).toBe(2);
+    expect(m.run.agents.orquestador.tokensEntrada).toBe(10);
+  });
+
+  it("si la IA no está disponible al planificar, continúa en modo simulado", async () => {
+    const m = memoryStore("Añade una página de contacto", templateFiles(), "ia");
+    const r = await runToEnd({ store: m.store, llm: async () => ({ result: null, reason: "sin crédito" }), sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(m.run.mode).toBe("simulado");
+    expect(m.events.some((e) => e.kind === "aviso" && e.message.includes("sin crédito"))).toBe(true);
+  });
+
+  it("descarta rutas peligrosas que proponga Develop", async () => {
+    const m = memoryStore("x página", templateFiles(), "ia");
+    const llm = (async (req: LlmRequest<unknown>) => {
+      if (req.system.includes("ORQUESTADOR")) return { reason: "", result: { motor: "f", tokensIn: 0, tokensOut: 0, data: { resumen: "", tareas: [{ titulo: "t", descripcion: "d", criterios: ["c"] }] } } };
+      if (req.system.includes("DEVELOP")) return { reason: "", result: { motor: "f", tokensIn: 0, tokensOut: 0, data: { resumen: "", archivos: [{ ruta: "../../etc/passwd", contenido: "x" }, { ruta: "api.php", contenido: "x" }] } } };
+      return { reason: "", result: { motor: "f", tokensIn: 0, tokensOut: 0, data: { observaciones: "", criterios: [{ criterio: "c", cumple: true, motivo: "" }] } } };
+    }) as unknown as Deps["llm"];
+    await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(Object.keys(m.site())).not.toContain("../../etc/passwd");
+    expect(m.events.some((e) => e.message.includes("descartado"))).toBe(true);
+  });
+});

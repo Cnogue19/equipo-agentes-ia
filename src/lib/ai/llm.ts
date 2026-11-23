@@ -1,0 +1,241 @@
+/**
+ * Capa de IA: llama a un modelo de lenguaje y devuelve JSON validado con Zod.
+ *
+ * Proveedores (se prueban en orden; si uno no está disponible se pasa al siguiente):
+ *  1. "gateway"   → Claude vía Vercel AI Gateway (SDK oficial de Anthropic, autenticado con el
+ *                   token OIDC del propio despliegue de Vercel: no hace falta ninguna clave).
+ *  2. "anthropic" → Claude con ANTHROPIC_API_KEY (SDK oficial de Anthropic).
+ *  3. "groq"      → Groq (plan gratuito) con GROQ_API_KEY, API compatible con OpenAI.
+ * Si ninguno funciona, los agentes usan su modo "simulado" (lógica determinista, sin IA).
+ *
+ * Ninguna clave está en el repositorio: todas se leen de variables de entorno.
+ */
+import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { z } from "zod";
+
+export type LlmRequest<T> = {
+  system: string;
+  prompt: string;
+  schema: z.ZodType<T>;
+  effort: "low" | "medium" | "high";
+  maxTokens: number;
+  /** Se llama mientras el modelo escribe (nº de caracteres generados). */
+  onProgress?: (chars: number) => void;
+};
+
+export type LlmResult<T> = { data: T; motor: string; tokensIn: number; tokensOut: number };
+
+type Provider = {
+  id: "gateway" | "anthropic" | "groq";
+  label: string;
+  configured: () => boolean;
+  call: <T>(req: LlmRequest<T>) => Promise<LlmResult<T>>;
+};
+
+/** Error que indica que el proveedor no se puede usar (sin crédito, sin permiso…). */
+export class ProviderUnavailableError extends Error {}
+
+const GATEWAY_URL = "https://ai-gateway.vercel.sh";
+
+/** Proveedores desactivados temporalmente tras un error de cuenta/crédito. */
+const disabledUntil = new Map<string, { until: number; reason: string }>();
+
+function extractJson(text: string): unknown {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("La respuesta del modelo no contiene JSON");
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+function schemaHint<T>(schema: z.ZodType<T>) {
+  return `\n\nResponde ÚNICAMENTE con un objeto JSON válido que cumpla este JSON Schema (sin texto antes ni después, sin bloques de código):\n${JSON.stringify(z.toJSONSchema(schema))}`;
+}
+
+async function gatewayToken(): Promise<string | null> {
+  if (process.env.AI_GATEWAY_API_KEY) return process.env.AI_GATEWAY_API_KEY;
+  try {
+    const { getVercelOidcToken } = await import("@vercel/oidc");
+    return await getVercelOidcToken();
+  } catch {
+    return process.env.VERCEL_OIDC_TOKEN ?? null;
+  }
+}
+
+async function callClaude<T>(
+  client: Anthropic,
+  model: string,
+  motor: string,
+  req: LlmRequest<T>,
+): Promise<LlmResult<T>> {
+  try {
+    const stream = client.messages.stream({
+      model,
+      max_tokens: req.maxTokens,
+      system: req.system,
+      messages: [{ role: "user", content: req.prompt + schemaHint(req.schema) }],
+      output_config: { effort: req.effort, format: zodOutputFormat(req.schema) },
+    });
+    let chars = 0;
+    stream.on("text", (delta) => {
+      chars += delta.length;
+      req.onProgress?.(chars);
+    });
+    const msg = await stream.finalMessage();
+    if (msg.stop_reason === "refusal") throw new Error("El modelo rechazó la petición (refusal)");
+    if (msg.stop_reason === "max_tokens") throw new Error("La respuesta se cortó por max_tokens");
+    const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+    const data = req.schema.parse(extractJson(text));
+    return { data, motor, tokensIn: msg.usage.input_tokens, tokensOut: msg.usage.output_tokens };
+  } catch (e) {
+    if (
+      e instanceof Anthropic.AuthenticationError ||
+      e instanceof Anthropic.PermissionDeniedError ||
+      e instanceof Anthropic.NotFoundError ||
+      (e instanceof Anthropic.APIError && (e.status === 402 || e.status === 403))
+    ) {
+      throw new ProviderUnavailableError(`${motor}: ${e.message.slice(0, 300)}`);
+    }
+    throw e;
+  }
+}
+
+const providers: Provider[] = [
+  {
+    id: "gateway",
+    label: "Claude (Vercel AI Gateway)",
+    configured: () => Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL || process.env.VERCEL_OIDC_TOKEN),
+    call: async (req) => {
+      const token = await gatewayToken();
+      if (!token) throw new ProviderUnavailableError("gateway: sin token OIDC ni AI_GATEWAY_API_KEY");
+      const model = process.env.AI_GATEWAY_MODEL || "anthropic/claude-opus-5.5";
+      const client = new Anthropic({ apiKey: token, baseURL: GATEWAY_URL, maxRetries: 1, timeout: 240_000 });
+      return callClaude(client, model, `${model} · AI Gateway`, req);
+    },
+  },
+  {
+    id: "anthropic",
+    label: "Claude (API de Anthropic)",
+    configured: () => Boolean(process.env.ANTHROPIC_API_KEY),
+    call: async (req) => {
+      const model = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
+      const client = new Anthropic({ maxRetries: 1, timeout: 240_000 });
+      return callClaude(client, model, `${model} · API Anthropic`, req);
+    },
+  },
+  {
+    id: "groq",
+    label: "Groq (plan gratuito)",
+    configured: () => Boolean(process.env.GROQ_API_KEY),
+    call: async <T>(req: LlmRequest<T>): Promise<LlmResult<T>> => {
+      const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        body: JSON.stringify({
+          model,
+          max_completion_tokens: req.maxTokens,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: req.system },
+            { role: "user", content: req.prompt + schemaHint(req.schema) },
+          ],
+        }),
+        signal: AbortSignal.timeout(240_000),
+      });
+      if (res.status === 401 || res.status === 402 || res.status === 403) {
+        throw new ProviderUnavailableError(`groq: HTTP ${res.status}`);
+      }
+      if (!res.ok) throw new Error(`groq: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
+      const json = (await res.json()) as {
+        choices: { message: { content: string } }[];
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
+      const text = json.choices[0]?.message?.content ?? "";
+      req.onProgress?.(text.length);
+      const data = req.schema.parse(extractJson(text));
+      return { data, motor: `${model} · Groq`, tokensIn: json.usage?.prompt_tokens ?? 0, tokensOut: json.usage?.completion_tokens ?? 0 };
+    },
+  },
+];
+
+/** Motor elegido por configuración: AI_ENGINE=auto (por defecto) | simulado | gateway | anthropic | groq */
+function enabledProviders(): Provider[] {
+  const mode = (process.env.AI_ENGINE || "auto").toLowerCase();
+  if (mode === "simulado") return [];
+  const list = mode === "auto" ? providers : providers.filter((p) => p.id === mode);
+  return list.filter((p) => p.configured());
+}
+
+export type EngineInfo = {
+  modo: string;
+  proveedores: { id: string; nombre: string; disponible: boolean; estado: string }[];
+};
+
+const probedAt = new Map<string, number>();
+
+/** Prueba rápida (cacheada 10 min) de que el proveedor responde: una llamada mínima al modelo. */
+async function probe(p: Provider) {
+  const last = probedAt.get(p.id) ?? 0;
+  if (Date.now() - last < 10 * 60_000) return;
+  probedAt.set(p.id, Date.now());
+  try {
+    await p.call({
+      system: "Responde solo con el JSON pedido.",
+      prompt: 'Devuelve {"ok": true}',
+      schema: z.object({ ok: z.boolean() }),
+      effort: "low",
+      maxTokens: 400,
+    });
+    disabledUntil.delete(p.id);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message.slice(0, 300) : String(e);
+    disabledUntil.set(p.id, { until: Date.now() + 10 * 60_000, reason });
+  }
+}
+
+export async function engineInfo(): Promise<EngineInfo> {
+  const list = enabledProviders();
+  await Promise.all(list.map(probe));
+  const now = Date.now();
+  return {
+    modo: process.env.AI_ENGINE || "auto",
+    proveedores: list.map((p) => {
+      const d = disabledUntil.get(p.id);
+      const disponible = !(d && d.until > now);
+      return { id: p.id, nombre: p.label, disponible, estado: disponible ? "disponible" : `no disponible: ${d!.reason}` };
+    }),
+  };
+}
+
+/**
+ * Llama al primer proveedor disponible. Devuelve null si no hay ninguno (→ modo simulado),
+ * junto con el motivo para mostrarlo en pantalla.
+ */
+export async function callLlm<T>(req: LlmRequest<T>): Promise<{ result: LlmResult<T> | null; reason: string }> {
+  const reasons: string[] = [];
+  const now = Date.now();
+  for (const p of enabledProviders()) {
+    const d = disabledUntil.get(p.id);
+    if (d && d.until > now) {
+      reasons.push(d.reason);
+      continue;
+    }
+    let lastError: unknown;
+    // Hasta 2 intentos por proveedor (p. ej. si el JSON no valida a la primera).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return { result: await p.call(req), reason: "" };
+      } catch (e) {
+        lastError = e;
+        if (e instanceof ProviderUnavailableError) break;
+      }
+    }
+    const msg = lastError instanceof Error ? lastError.message : String(lastError);
+    if (lastError instanceof ProviderUnavailableError) {
+      disabledUntil.set(p.id, { until: now + 10 * 60_000, reason: msg });
+    }
+    reasons.push(msg.slice(0, 300));
+  }
+  return { result: null, reason: reasons.length ? reasons.join(" | ") : "No hay ningún proveedor de IA configurado" };
+}
