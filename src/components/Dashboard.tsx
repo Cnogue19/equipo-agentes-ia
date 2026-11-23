@@ -35,7 +35,8 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function getJson<T>(url: string): Promise<T | null> {
   const r = await fetch(url, { cache: "no-store" });
   if (r.status === 401) {
-    window.location.href = "/login";
+    // Sesión caducada: al recargar, el servidor redirige al login.
+    window.location.reload();
     return null;
   }
   return r.ok ? ((await r.json()) as T) : null;
@@ -143,6 +144,14 @@ export default function Dashboard({ user }: { user: User }) {
     refreshLists();
   }
 
+  async function cancelRun() {
+    if (!runId || !confirm("¿Cancelar esta petición? Los agentes se detendrán y la web publicada no cambiará.")) return;
+    const r = await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    if (!r.ok) setError(((await r.json().catch(() => ({}))) as { error?: string }).error ?? "No se ha podido cancelar");
+    setRunVersion((v) => v + 1);
+    refreshLists();
+  }
+
   async function resetSite() {
     if (!confirm("¿Restaurar la web de ejemplo a su estado original? Se perderán los cambios hechos por los agentes.")) return;
     const r = await fetch("/api/site", { method: "DELETE" });
@@ -172,7 +181,7 @@ export default function Dashboard({ user }: { user: User }) {
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
-            <span className="text-2xl" aria-hidden>🧭🛠️🧪</span>
+            <span className="shrink-0 whitespace-nowrap text-2xl" aria-hidden>🧭🛠️🧪</span>
             <div>
               <h1 className="font-bold leading-tight">Equipo de agentes IA</h1>
               <p className="text-xs text-slate-500">Orquestador · Develop · Testing — trabajando sobre «{info?.site.name ?? "…"}»</p>
@@ -262,7 +271,15 @@ export default function Dashboard({ user }: { user: User }) {
                   <p className="text-xs text-slate-500">Petición #{state.run.id} · {state.run.mode === "simulado" ? "modo simulado (sin IA)" : "modo IA"}</p>
                   <h2 className="truncate text-lg font-semibold">«{state.run.request}»</h2>
                 </div>
-                <span className={`rounded-full px-3 py-1 text-sm font-semibold ${RUN_STATUS[state.run.status].cls}`}>{RUN_STATUS[state.run.status].label}</span>
+                <div className="flex items-center gap-2">
+                  {active && (
+                    <button type="button" onClick={cancelRun}
+                      className="rounded-lg border border-red-200 px-3 py-1 text-sm font-medium text-red-700 hover:bg-red-50">
+                      Cancelar
+                    </button>
+                  )}
+                  <span className={`rounded-full px-3 py-1 text-sm font-semibold ${RUN_STATUS[state.run.status].cls}`}>{RUN_STATUS[state.run.status].label}</span>
+                </div>
               </div>
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuemin={0} aria-valuemax={tasks.length || 1} aria-valuenow={done} aria-label="Tareas completadas">
                 <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-500 transition-all" style={{ width: `${tasks.length ? (done / tasks.length) * 100 : active ? 5 : 0}%` }} />

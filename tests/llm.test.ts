@@ -59,7 +59,7 @@ describe("callClaude (SDK de Anthropic)", () => {
     bodies.length = 0;
     handler = () => ({ status: 200, sse: sseMessage(JSON.stringify({ resumen: "ok", tareas: ["a", "b"] })) });
     let progress = 0;
-    const r = await callClaude(client(), "anthropic/claude-opus-5.5", "motor", { ...req, onProgress: (c) => (progress = c) });
+    const r = await callClaude(client(), "anthropic/claude-opus-5.5", "motor", { ...req, onProgress: (p) => (progress = p.caracteres) });
     expect(r.data).toEqual({ resumen: "ok", tareas: ["a", "b"] });
     expect(r.tokensIn).toBe(120);
     expect(r.tokensOut).toBe(42);
@@ -69,6 +69,28 @@ describe("callClaude (SDK de Anthropic)", () => {
     expect(sent.stream).toBe(true);
     expect(sent.output_config.effort).toBe("low");
     expect(sent.output_config.format.type).toBe("json_schema");
+  });
+
+  it("informa de la fase de razonamiento y después de la de escritura", async () => {
+    const ev = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+    const full = sseMessage(JSON.stringify({ resumen: "ok", tareas: [] }));
+    // Inserta un bloque de razonamiento (índice 0) antes del texto, que pasa a ser el bloque 1.
+    const text = full.slice(1).map((e) => e.replace('"index":0', '"index":1'));
+    handler = () => ({
+      status: 200,
+      sse: [
+        full[0],
+        ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }),
+        ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Pienso en el plan…" } }),
+        ev("content_block_stop", { type: "content_block_stop", index: 0 }),
+        ...text,
+      ],
+    });
+    const fases: string[] = [];
+    const r = await callClaude(client(), "recursive/flint-v1.0", "motor", { ...req, onProgress: (p) => fases.push(`${p.fase}:${p.modelo}`) });
+    expect(r.data.resumen).toBe("ok");
+    expect(fases[0]).toBe("razonando:recursive/flint-v1.0");
+    expect(fases.at(-1)).toBe("escribiendo:recursive/flint-v1.0");
   });
 
   it("si el servidor rechaza los parámetros avanzados (400), reintenta en modo básico", async () => {

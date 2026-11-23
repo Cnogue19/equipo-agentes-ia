@@ -20,9 +20,11 @@ export type LlmRequest<T> = {
   schema: z.ZodType<T>;
   effort: "low" | "medium" | "high";
   maxTokens: number;
-  /** Se llama mientras el modelo escribe (nº de caracteres generados). */
-  onProgress?: (chars: number) => void;
+  /** Se llama mientras el modelo trabaja: si está razonando o escribiendo, caracteres y segundos. */
+  onProgress?: (p: LlmProgress) => void;
 };
+
+export type LlmProgress = { fase: "razonando" | "escribiendo"; caracteres: number; segundos: number; modelo: string };
 
 export type LlmResult<T> = { data: T; motor: string; tokensIn: number; tokensOut: number };
 
@@ -89,10 +91,19 @@ export async function callClaude<T>(
       },
       timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined,
     );
+    const t0 = Date.now();
     let chars = 0;
+    let thinking = 0;
+    const report = (fase: LlmProgress["fase"], caracteres: number) =>
+      req.onProgress?.({ fase, caracteres, segundos: Math.round((Date.now() - t0) / 1000), modelo: model });
+    // Los modelos que razonan pasan un rato "pensando" antes de escribir: se informa de ambas fases.
+    stream.on("thinking", (delta) => {
+      thinking += delta.length;
+      report("razonando", thinking);
+    });
     stream.on("text", (delta) => {
       chars += delta.length;
-      req.onProgress?.(chars);
+      report("escribiendo", chars);
     });
     const msg = await stream.finalMessage();
     if (msg.stop_reason === "refusal") throw new Error("El modelo rechazó la petición (refusal)");
@@ -212,7 +223,7 @@ const providers: Provider[] = [
         usage?: { prompt_tokens: number; completion_tokens: number };
       };
       const text = json.choices[0]?.message?.content ?? "";
-      req.onProgress?.(text.length);
+      req.onProgress?.({ fase: "escribiendo", caracteres: text.length, segundos: 0, modelo: model });
       const data = req.schema.parse(extractJson(text));
       return { data, motor: `${model} · Groq`, tokensIn: json.usage?.prompt_tokens ?? 0, tokensOut: json.usage?.completion_tokens ?? 0 };
     },

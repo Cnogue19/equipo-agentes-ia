@@ -50,7 +50,7 @@ export const dbStore: Store = {
   },
   async patchRun(id, p: RunPatch) {
     await sql()`UPDATE runs SET
-      status = COALESCE(${p.status ?? null}, status),
+      status = CASE WHEN status IN ('completada', 'fallida') THEN status ELSE COALESCE(${p.status ?? null}, status) END,
       summary = COALESCE(${p.summary ?? null}, summary),
       agents = COALESCE(${j(p.agents)}::jsonb, agents),
       error = CASE WHEN ${p.error !== undefined} THEN ${p.error ?? null} ELSE error END,

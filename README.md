@@ -31,6 +31,8 @@ step():  Orquestador planifica ─► [por cada tarea]
 - **Máquina de estados persistente** (`src/lib/engine.ts`): cada llamada a `step()` ejecuta una sola acción y la guarda en la base de datos. Así ninguna petición HTTP supera el límite de las funciones de Vercel, todo el progreso es visible y, si se cierra el navegador, la ejecución se reanuda donde estaba. Un bloqueo en BD (`lock_until`) impide que dos pestañas avancen la misma ejecución a la vez.
 - **Testing tiene dos capas**: comprobaciones automáticas deterministas (`src/lib/agents/checks.ts`: HTML bien formado con *parse5*, enlaces rotos, `alt` en imágenes, `<label>` en formularios, ids duplicados, sintaxis JS con *acorn*, llaves CSS, páginas huérfanas) + evaluación de cada criterio de aceptación por el modelo. Una tarea solo pasa si **no hay errores automáticos y se cumplen todos los criterios**; si no, los fallos concretos vuelven a Develop.
 - **Salida estructurada**: cada agente responde JSON validado con Zod (`src/lib/agents/prompts.ts`), usando la salida estructurada de la API de Claude.
+- **Progreso en vivo de la IA**: mientras un modelo razona, la tarjeta del agente muestra «Razonando con <modelo>… N s»; cuando escribe, los caracteres generados.
+- **Cancelar**: una petición en curso se puede cancelar desde la interfaz; los agentes se detienen y la web publicada no cambia (un paso que siguiera en marcha ya no puede reactivarla).
 - **Vista previa aislada**: la web generada se muestra en un `iframe` con `sandbox` (y CSP `sandbox` si se abre directamente), con CSS/JS/SVG incrustados; su código no puede leer la sesión ni llamar a la API.
 
 ### Motor de IA
@@ -55,7 +57,7 @@ Tablas (`src/lib/schema.sql`): `users`, `sites` (la web de cada usuario), `runs`
 - **Ninguna clave en el repositorio**: `DATABASE_URL`, `SESSION_SECRET` y las claves de IA viven solo en variables de entorno de Vercel / `.env.local` (ignorado por git). Ver `.env.example`.
 - Contraseñas con *scrypt*; sesión en cookie `httpOnly` firmada (JWT HS256).
 - Develop solo puede escribir rutas relativas seguras con extensiones permitidas (`.html .css .js .svg .json .txt`), con tamaño y número de ficheros limitados.
-- Límite de peticiones por usuario y día (`MAX_RUNS_PER_DAY`) para proteger el crédito de IA.
+- Límite de peticiones por usuario y día (`MAX_RUNS_PER_DAY`, 50 por defecto) para proteger el crédito de IA.
 
 ## Ejecutar en local
 
@@ -69,7 +71,7 @@ npm run dev
 Tests y comprobaciones:
 
 ```bash
-npm test            # 16 tests: comprobaciones de Testing, ciclo completo de los agentes, SDK de Claude contra un servidor falso
+npm test            # 18 tests: comprobaciones de Testing, ciclo completo de los agentes, SDK de Claude contra un servidor falso
 npm run typecheck && npm run lint && npm run build
 ```
 
@@ -80,7 +82,7 @@ Todo el proyecto se ha programado con **Claude Code** (app de escritorio, modelo
 1. **Lectura del enunciado y plan**: a partir de una captura del email, Claude Code extrajo los requisitos y mantuvo una lista de tareas visible (revisar herramientas → arquitectura → código → interfaz → BD y despliegue → GitHub → pruebas en producción → informe).
 2. **Infraestructura desde la terminal**: instaló Vercel CLI y GitHub CLI, creó el proyecto de Vercel, aprovisionó Neon desde Vercel Marketplace (`vercel integration add neon`), generó `SESSION_SECRET` y lo guardó como variable cifrada de Vercel sin mostrarlo nunca, y creó el repositorio en GitHub. Los inicios de sesión y la aceptación de términos los hizo la persona usuaria en su navegador.
 3. **Documentación antes de programar**: como Next.js 16 tiene cambios incompatibles, Claude Code leyó la documentación incluida en `node_modules/next/dist/docs` (Route Handlers, `RouteContext`, `maxDuration`, Cache Components) y la del AI Gateway y del SDK de Anthropic antes de escribir código.
-4. **Programación y tests**: escribió el motor, los agentes, la interfaz y 16 tests con Vitest (incluido un servidor local que imita la API de Claude). Los tests encontraron un fallo real (el SDK parseaba el JSON antes de comprobar `max_tokens`), que se corrigió.
+4. **Programación y tests**: escribió el motor, los agentes, la interfaz y 18 tests con Vitest (incluido un servidor local que imita la API de Claude). Los tests encontraron un fallo real (el SDK parseaba el JSON antes de comprobar `max_tokens`), que se corrigió.
 5. **Verificación en navegador**: arrancó la app en local y la probó con el navegador integrado de Claude Code (login, ejecución en directo, vista previa, código). Así detectó y corrigió un problema de maquetación y que la vista previa necesitaba incrustar CSS/JS.
 6. **Pruebas en producción**: tras desplegar, ejecutó peticiones completas contra la URL pública; una de ellas destapó un fallo (repetir una petición sobre una web que ya tenía la página bloqueaba una tarea), que se corrigió con su test de regresión.
 

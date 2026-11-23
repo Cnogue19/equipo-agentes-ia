@@ -71,7 +71,7 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 | CA6 (R8) | La pantalla muestra, en tiempo real, el estado y la actividad de cada agente y el estado de cada tarea (con intentos y fallos devueltos) | Componentes `AgentCards`, `TaskBoard` y `ActivityLog`; refresco cada 1,2 s; verificado en navegador |
 | CA7 (R8) | Se puede ver la web resultante y el código cambiado | Componentes `Preview` (iframe aislado y navegable) y `CodeView` (diff); verificado en navegador |
 | CA8 (D7) | Si la IA no está disponible al planificar, la ejecución continúa en modo simulado y lo indica | `engine.test.ts` → «si la IA no está disponible al planificar, continúa en modo simulado» |
-| CA9 (D4, D7) | La llamada al modelo usa el SDK oficial de Anthropic con salida estructurada; si el intermediario rechaza parámetros avanzados reintenta en modo básico; un error de crédito o permiso marca el proveedor como no disponible; una respuesta cortada se detecta | `tests/llm.test.ts` (4 tests contra un servidor que imita la API de Claude) |
+| CA9 (D4, D7) | La llamada al modelo usa el SDK oficial de Anthropic con salida estructurada e informa del progreso (fase de razonamiento y de escritura); si el intermediario rechaza parámetros avanzados reintenta en modo básico; un error de crédito o permiso marca el proveedor como no disponible; una respuesta cortada se detecta | `tests/llm.test.ts` (5 tests contra un servidor que imita la API de Claude) |
 | CA10 (D10) | Develop no puede escribir rutas como `../../etc/passwd` ni extensiones no permitidas | `engine.test.ts` → «descarta rutas peligrosas que proponga Develop» + `checks.test.ts` (`isSafePath`) |
 | CA11 | Repetir una petición sobre una web que ya la incluye también termina bien | `engine.test.ts` → «repetir la misma petición…» (test de regresión de un fallo encontrado en producción) |
 | CA12 | El modo simulado genera contenido real (5 preguntas frecuentes, tabla de precios) que pasa las comprobaciones | `engine.test.ts` → «genera contenido real…» |
@@ -80,6 +80,8 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 | CA15 (D8, R11) | Sin sesión, la API y la app devuelven 401 o redirigen al login; con el usuario de prueba se accede | Probado en producción (`/api/runs` → 401 sin sesión) |
 | CA16 (D9) | La vista previa no puede acceder a la sesión ni a la API: iframe con `sandbox` y CSP `sandbox`; enlace firmado y con caducidad | `src/app/preview/...`, `src/lib/preview-token.ts`; enlace no válido → 401 |
 | CA17 (R10) | El repositorio no contiene claves, contraseñas ni cadenas de conexión | Secretos solo en variables de entorno de Vercel / `.env.local` (ignorado); revisión del repositorio antes de publicarlo |
+| CA18 (R8) | Una petición en curso se puede cancelar: los agentes se detienen, la web publicada no cambia y un paso que siguiera en marcha no puede reactivarla | `engine.test.ts` → «cancelar una petición…»; botón «Cancelar» en la interfaz; `POST /api/runs/:id/cancel` |
+| CA19 (R8) | Mientras la IA razona o escribe, la tarjeta del agente muestra la fase y el tiempo transcurrido | `llm.test.ts` → «informa de la fase de razonamiento…»; actividad «Razonando con <modelo>… N s» |
 
 ## 7. Fuera de alcance
 
@@ -90,7 +92,7 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 ## 8. Comprobación de que se cumple la especificación
 
 ```bash
-npm test             # 16 tests (CA1–CA5, CA8–CA12)
+npm test             # 18 tests (CA1–CA5, CA8–CA12, CA18, CA19)
 npm run typecheck && npm run lint && npm run build
 ```
 

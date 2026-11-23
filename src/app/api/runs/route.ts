@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { error, json, requireUser } from "@/lib/http";
 import { createRun, hasActiveRun, listRuns, runsToday } from "@/lib/repo";
 
-const MAX_RUNS_PER_DAY = Number(process.env.MAX_RUNS_PER_DAY || 20);
+const MAX_RUNS_PER_DAY = Number(process.env.MAX_RUNS_PER_DAY || 50);
 
 export async function GET() {
   const user = await requireUser();

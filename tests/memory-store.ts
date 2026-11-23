@@ -27,7 +27,8 @@ export function memoryStore(request: string, files: Files, mode: "ia" | "simulad
       return structuredClone(run);
     },
     async patchRun(_id, p) {
-      if (p.status) run.status = p.status;
+      // Igual que en la BD: un estado final (completada/fallida) ya no se cambia.
+      if (p.status && run.status !== "completada" && run.status !== "fallida") run.status = p.status;
       if (p.summary) run.summary = p.summary;
       if (p.agents) run.agents = structuredClone(p.agents);
       if (p.error !== undefined) run.error = p.error;

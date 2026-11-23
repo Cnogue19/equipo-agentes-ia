@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { step, type Deps } from "../src/lib/engine";
+import { cancelRun, step, type Deps } from "../src/lib/engine";
 import { templateFiles } from "../src/lib/site-template";
 import { hasErrors, runAutomaticChecks } from "../src/lib/agents/checks";
 import type { LlmRequest } from "../src/lib/ai/llm";
@@ -68,6 +68,23 @@ describe("equipo de agentes en modo simulado", () => {
     const r = await runToEnd({ store: m.store, llm: async () => ({ result: null, reason: "" }), sleep: noSleep });
     expect(r.status).toBe("completada");
     expect(Object.keys(m.site()).some((p) => p.startsWith("recetas"))).toBe(true);
+  });
+});
+
+describe("cancelar una petición", () => {
+  it("detiene la ejecución, no publica cambios y un paso posterior no la reactiva", async () => {
+    const m = memoryStore("Añade una página de contacto a esta web", templateFiles(), "simulado");
+    const llm = async () => ({ result: null, reason: "" });
+    await step(1, { store: m.store, llm, sleep: noSleep }); // planifica
+    await step(1, { store: m.store, llm, sleep: noSleep }); // Develop entrega la tarea 1
+    expect(await cancelRun(1, m.store)).toBe(true);
+    expect(m.run.status).toBe("fallida");
+    expect(m.run.error).toBe("Cancelada por el usuario");
+    const after = await step(1, { store: m.store, llm, sleep: noSleep });
+    expect(after).toEqual({ status: "fallida", done: true });
+    expect(m.site()["contacto.html"]).toBeUndefined(); // la web publicada no cambia
+    expect(await cancelRun(1, m.store)).toBe(false); // ya estaba terminada
+    expect(m.events.at(-1)?.kind).toBe("cancelada");
   });
 });
 

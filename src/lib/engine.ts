@@ -13,7 +13,7 @@ import { MAX_ATTEMPTS } from "./types";
 import { runAutomaticChecks, isSafePath } from "./agents/checks";
 import { simulatedCriteria, simulatedDevelop, simulatedPlan, type Plan } from "./agents/simulated";
 import { DEVELOP_SYSTEM, DevSchema, ORQUESTADOR_SYSTEM, PlanSchema, TESTING_SYSTEM, TestSchema, renderFiles } from "./agents/prompts";
-import type { callLlm } from "./ai/llm";
+import type { callLlm, LlmProgress } from "./ai/llm";
 
 export type RunRow = Run & { user_id: number; mode: "ia" | "simulado"; files: Files; base_files: Files };
 
@@ -81,11 +81,16 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
   /** Actualiza la actividad del agente mientras el modelo escribe (como mucho cada 1,5 s). */
   const progress = (id: AgentId, label: string) => {
     let last = 0;
-    return (chars: number) => {
+    return (p: LlmProgress) => {
       const now = Date.now();
       if (now - last < 1500) return;
       last = now;
-      void setAgent(id, { actividad: `${label}… ${(chars / 1000).toFixed(1)} mil caracteres` }).catch(() => {});
+      const modelo = p.modelo.split("/").pop();
+      const actividad =
+        p.fase === "razonando"
+          ? `Razonando con ${modelo}… ${p.segundos} s`
+          : `${label}… ${(p.caracteres / 1000).toFixed(1)} mil caracteres (${p.segundos} s)`;
+      void setAgent(id, { actividad }).catch(() => {});
     };
   };
 
@@ -301,6 +306,9 @@ async function finish(
   sleep: (ms: number) => Promise<void>,
 ): Promise<{ status: RunStatus; done: boolean }> {
   const { store } = deps;
+  // Si la ejecución se canceló mientras este paso estaba en marcha, no se publica nada.
+  const fresh = await store.getRun(run.id);
+  if (!fresh || fresh.status === "fallida") return { status: "fallida", done: true };
   await setAgent("orquestador", { estado: "trabajando", actividad: "Revisión final de toda la web" });
   if (run.mode === "simulado") await sleep(800);
   const finalChecks = runAutomaticChecks(run.files);
@@ -328,4 +336,20 @@ async function fail(run: RunRow, deps: Deps, message: string): Promise<{ status:
   await deps.store.addEvent(run.id, { agent: "sistema", kind: "error", message });
   await deps.store.patchRun(run.id, { status: "fallida", error: message, agents, finished: true });
   return { status: "fallida", done: true };
+}
+
+/**
+ * Cancela una ejecución en curso a petición del usuario. Devuelve false si ya había terminado.
+ * El almacén no deja que un paso que todavía estuviera en marcha vuelva a cambiar el estado final.
+ */
+export async function cancelRun(runId: number, store: Store): Promise<boolean> {
+  const run = await store.getRun(runId);
+  if (!run || run.status === "completada" || run.status === "fallida") return false;
+  const agents = run.agents;
+  for (const id of ["orquestador", "develop", "testing"] as AgentId[]) {
+    agents[id] = { ...agents[id], estado: "inactivo", actividad: "Petición cancelada" };
+  }
+  await store.addEvent(run.id, { agent: "sistema", kind: "cancelada", message: "Petición cancelada por el usuario. La web publicada no se ha modificado." });
+  await store.patchRun(run.id, { status: "fallida", error: "Cancelada por el usuario", agents, finished: true });
+  return true;
 }
