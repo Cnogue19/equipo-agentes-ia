@@ -74,9 +74,11 @@ export async function callClaude<T>(
   motor: string,
   req: LlmRequest<T>,
   basic = false,
+  timeoutMs?: number,
 ): Promise<LlmResult<T>> {
   try {
-    const stream = client.messages.stream({
+    const stream = client.messages.stream(
+      {
       model,
       max_tokens: req.maxTokens,
       system: req.system,
@@ -84,7 +86,9 @@ export async function callClaude<T>(
       // Salida estructurada (JSON Schema) + nivel de esfuerzo. En modo "basic" se omiten por si
       // el intermediario (p. ej. la pasarela) no los admite; el esquema sigue en el prompt.
       ...(basic ? {} : { output_config: { effort: req.effort, format: jsonFormat(req.schema) } }),
-    });
+      },
+      timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined,
+    );
     let chars = 0;
     stream.on("text", (delta) => {
       chars += delta.length;
@@ -97,7 +101,7 @@ export async function callClaude<T>(
     const data = req.schema.parse(extractJson(text));
     return { data, motor, tokensIn: msg.usage.input_tokens, tokensOut: msg.usage.output_tokens };
   } catch (e) {
-    if (!basic && e instanceof Anthropic.BadRequestError) return callClaude(client, model, motor, req, true);
+    if (!basic && e instanceof Anthropic.BadRequestError) return callClaude(client, model, motor, req, true, timeoutMs);
     if (
       e instanceof Anthropic.AuthenticationError ||
       e instanceof Anthropic.PermissionDeniedError ||
@@ -110,17 +114,63 @@ export async function callClaude<T>(
   }
 }
 
+/**
+ * Modelos que se prueban en la pasarela, en orden. Claude primero; si la cuenta está en el plan
+ * gratuito de AI Gateway (que no incluye Claude), se usan modelos abiertos gratuitos de la misma
+ * pasarela, con el mismo SDK y la misma API de Messages.
+ */
+function gatewayModels(): string[] {
+  const list = process.env.AI_GATEWAY_MODELS || process.env.AI_GATEWAY_MODEL;
+  return (list || "anthropic/claude-opus-5.5,recursive/flint-v1.0,nvidia/nemotron-3.5-lightning-free")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
+const GATEWAY_BUDGET_MS = 260_000;
+const PER_MODEL_MAX_MS = 170_000;
+
+/** Modelos de la pasarela no disponibles para esta cuenta (p. ej. Claude en el plan gratuito). */
+const modelUnavailable = new Map<string, number>();
+/** Último modelo de la pasarela que respondió bien (se muestra en pantalla). */
+let lastGatewayModel: string | null = null;
+
 const providers: Provider[] = [
   {
     id: "gateway",
-    label: "Claude (Vercel AI Gateway)",
+    label: "Vercel AI Gateway",
     configured: () => Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL || process.env.VERCEL_OIDC_TOKEN),
     call: async (req) => {
       const token = await gatewayToken();
       if (!token) throw new ProviderUnavailableError("gateway: sin token OIDC ni AI_GATEWAY_API_KEY");
-      const model = process.env.AI_GATEWAY_MODEL || "anthropic/claude-opus-5.5";
-      const client = new Anthropic({ apiKey: token, baseURL: GATEWAY_URL, maxRetries: 1, timeout: 240_000 });
-      return callClaude(client, model, `${model} · AI Gateway`, req);
+      const client = new Anthropic({ apiKey: token, baseURL: GATEWAY_URL, maxRetries: 0 });
+      // Presupuesto de tiempo por paso: la función de Vercel se corta a los 300 s.
+      const deadline = Date.now() + GATEWAY_BUDGET_MS;
+      const models = gatewayModels().filter((m) => (modelUnavailable.get(m) ?? 0) <= Date.now());
+      const reasons: string[] = [];
+      for (const [i, model] of models.entries()) {
+        const remaining = deadline - Date.now();
+        if (remaining < 20_000) break;
+        // Si quedan más modelos detrás, este no puede gastarse todo el tiempo.
+        const timeout = i < models.length - 1 ? Math.min(remaining, PER_MODEL_MAX_MS) : remaining;
+        try {
+          const result = await callClaude(client, model, `${model} · AI Gateway`, req, false, timeout);
+          lastGatewayModel = model;
+          return result;
+        } catch (e) {
+          if (!(e instanceof ProviderUnavailableError)) {
+            // Lento o respuesta no válida: probar con el siguiente modelo dentro del mismo paso.
+            reasons.push(`${model}: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+            continue;
+          }
+          modelUnavailable.set(model, Date.now() + 10 * 60_000);
+          reasons.push(e.message.slice(0, 160));
+        }
+      }
+      // Si algún modelo existía pero falló (lento o respuesta no válida), no se desactiva la pasarela.
+      const anyTried = models.some((m) => (modelUnavailable.get(m) ?? 0) <= Date.now());
+      const msg = reasons.join(" | ") || "gateway: ningún modelo disponible";
+      throw anyTried ? new Error(msg) : new ProviderUnavailableError(msg);
     },
   },
   {
@@ -213,7 +263,8 @@ export async function engineInfo(): Promise<EngineInfo> {
     proveedores: list.map((p) => {
       const d = disabledUntil.get(p.id);
       const disponible = !(d && d.until > now);
-      return { id: p.id, nombre: p.label, disponible, estado: disponible ? "disponible" : `no disponible: ${d!.reason}` };
+      const nombre = p.id === "gateway" && disponible && lastGatewayModel ? `${p.label} · ${lastGatewayModel}` : p.label;
+      return { id: p.id, nombre, disponible, estado: disponible ? "disponible" : `no disponible: ${d!.reason}` };
     }),
   };
 }
@@ -233,12 +284,15 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<{ result: LlmResul
     }
     let lastError: unknown;
     // Hasta 2 intentos por proveedor (p. ej. si el JSON no valida a la primera).
+    const started = Date.now();
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         return { result: await p.call(req), reason: "" };
       } catch (e) {
         lastError = e;
         if (e instanceof ProviderUnavailableError) break;
+        // Solo se reintenta si el primer intento fue rápido (no pasarse del límite de Vercel).
+        if (Date.now() - started > 60_000) break;
       }
     }
     const msg = lastError instanceof Error ? lastError.message : String(lastError);

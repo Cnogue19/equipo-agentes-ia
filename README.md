@@ -39,12 +39,12 @@ step():  Orquestador planifica ─► [por cada tarea]
 
 | Proveedor | Configuración | Notas |
 |---|---|---|
-| Claude vía **Vercel AI Gateway** | Ninguna clave: en Vercel se autentica con el token OIDC del despliegue | Créditos gratuitos mensuales; Vercel exige tener una tarjeta registrada para activarlos |
+| **Vercel AI Gateway** | Ninguna clave: en Vercel se autentica con el token OIDC del despliegue | Prueba en cascada `anthropic/claude-opus-5.5` → `recursive/flint-v1.0` → `nvidia/nemotron-3.5-lightning-free` (configurable con `AI_GATEWAY_MODELS`). El plan gratuito de la pasarela (requiere tarjeta registrada) **no incluye Claude**, así que en la demo trabajan los modelos abiertos gratuitos; con créditos de pago se usa Claude automáticamente |
 | Claude vía **API de Anthropic** | `ANTHROPIC_API_KEY` | De pago |
 | **Groq** (plan gratuito) | `GROQ_API_KEY` | Gratis, sin tarjeta |
 | **Modo simulado** | — | Agentes deterministas sin IA (siempre disponible) |
 
-Modelo por defecto: `claude-opus-5-5` (configurable con `AI_GATEWAY_MODEL` / `ANTHROPIC_MODEL`). Si la IA no está disponible al empezar, el equipo continúa en **modo simulado** y lo indica en pantalla. En modo simulado, Develop comete a propósito un fallo en el primer intento de algunas tareas para que se vea el ciclo completo Testing → Develop.
+Todas las llamadas usan el SDK oficial de Anthropic y la API de Messages (la pasarela la ofrece también para modelos que no son de Anthropic). Cada paso tiene un presupuesto de tiempo: si un modelo tarda demasiado, se prueba el siguiente sin superar el límite de 300 s de las funciones de Vercel. Si la IA no está disponible al empezar, el equipo continúa en **modo simulado** y lo indica en pantalla. En modo simulado, Develop comete a propósito un fallo en el primer intento de algunas tareas para que se vea el ciclo completo Testing → Develop.
 
 ## Base de datos (Neon Postgres)
 

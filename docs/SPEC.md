@@ -34,7 +34,7 @@ Construir un pequeño equipo de **3 agentes de IA** que reciba una petición sob
 | D4 | Cada agente responde **JSON con un esquema fijo** (Zod / salida estructurada) | Respuestas fiables y procesables por código |
 | D5 | Testing combina **comprobaciones deterministas** + revisión de **criterios de aceptación** | Lo automático no se puede «convencer»; los criterios cubren lo funcional |
 | D6 | Máximo **4 intentos** por tarea | «Hasta que todo pasa» sin bucles infinitos ni gasto descontrolado |
-| D7 | Motor de IA con **proveedores en cascada** y **modo simulado** de respaldo | La app debe funcionar siempre, aunque no haya crédito de IA |
+| D7 | Motor de IA con **proveedores y modelos en cascada** (Claude → modelos gratuitos de la pasarela) y **modo simulado** de respaldo, con presupuesto de tiempo por paso | La app debe funcionar siempre, sin coste, y sin superar el límite de 300 s de Vercel |
 | D8 | **Login** con usuario de prueba y límite de peticiones por día | Proteger el crédito de IA de una URL pública (y R11) |
 | D9 | La web generada se muestra **aislada** (sandbox) | El código que escribe la IA no puede acceder a la sesión ni a la API |
 | D10 | Develop solo puede escribir **rutas seguras** con extensiones web y tamaño limitado | Evitar que la IA escriba ficheros peligrosos |
