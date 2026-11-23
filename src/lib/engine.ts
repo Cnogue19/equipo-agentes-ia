@@ -9,7 +9,7 @@
  * Testing comprueba → (si falla, vuelve a Develop con los fallos) → … → Orquestador cierra.
  */
 import type { AgentId, AgentState, AgentsState, CheckResult, CriterionResult, Files, Run, RunStatus, Task } from "./types";
-import { MAX_ATTEMPTS } from "./types";
+import { MAX_AI_RETRIES, MAX_ATTEMPTS } from "./types";
 import { runAutomaticChecks, isSafePath } from "./agents/checks";
 import { simulatedCriteria, simulatedDevelop, simulatedPlan, type Plan } from "./agents/simulated";
 import { DEVELOP_SYSTEM, DevSchema, ORQUESTADOR_SYSTEM, PlanSchema, TESTING_SYSTEM, TestSchema, renderFiles } from "./agents/prompts";
@@ -72,6 +72,7 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
   const addUsage = (id: AgentId, motor: string, tin: number, tout: number) => {
     agents[id] = {
       ...agents[id],
+      fallosSeguidos: 0,
       motor,
       llamadas: agents[id].llamadas + 1,
       tokensEntrada: agents[id].tokensEntrada + tin,
@@ -109,7 +110,7 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
           prompt: `PETICIÓN DEL USUARIO:\n${run.request}\n\nFICHEROS ACTUALES DE LA WEB:\n${renderFiles(run.files, 6000)}`,
           schema: PlanSchema,
           effort: "low",
-          maxTokens: 8000,
+          maxTokens: 24000,
           onProgress: progress("orquestador", "Planificando"),
         });
         if (result) {
@@ -158,7 +159,8 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
         await store.addEvent(run.id, { taskId: task.id, agent: "orquestador", kind: "asignacion", message: `Asigno la tarea ${n}/${tasks.length} a Develop: «${task.title}»` });
         await setAgent("orquestador", { estado: "esperando", actividad: `Supervisando la tarea ${n}/${tasks.length}` });
       }
-      const attempt = task.attempts + 1;
+      // Si la tarea ya estaba "en_desarrollo" es un reintento por fallo de la IA: no cuenta como intento nuevo.
+      const attempt = task.status === "en_desarrollo" ? Math.max(task.attempts, 1) : task.attempts + 1;
       await store.patchTask(task.id, { status: "en_desarrollo", assignee: "develop", attempts: attempt });
       await setAgent("develop", {
         estado: "trabajando",
@@ -177,7 +179,7 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
           maxTokens: 32000,
           onProgress: progress("develop", "Escribiendo código"),
         });
-        if (!result) return fail(run, deps, `Develop no ha podido usar la IA: ${reason}`);
+        if (!result) return aiFailed(run, deps, "develop", reason);
         output = result.data;
         addUsage("develop", result.motor, result.tokensIn, result.tokensOut);
       } else {
@@ -240,10 +242,10 @@ export async function step(runId: number, deps: Deps): Promise<{ status: RunStat
           prompt: `TAREA ${n}: ${task.title}\nDescripción: ${task.description}\n\nCRITERIOS A EVALUAR (uno por uno, en este orden):\n${task.criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\nFICHEROS CAMBIADOS POR DEVELOP EN ESTE INTENTO: ${(task.changed ?? []).join(", ") || "ninguno"}\n\nRESULTADO DE LAS COMPROBACIONES AUTOMÁTICAS:\n${automaticas.map((c) => `- [${c.estado}] ${c.nombre}: ${c.detalle}`).join("\n")}\n\nFICHEROS ACTUALES DE LA WEB:\n${renderFiles(run.files)}`,
           schema: TestSchema,
           effort: "low",
-          maxTokens: 8000,
+          maxTokens: 24000,
           onProgress: progress("testing", "Redactando el informe"),
         });
-        if (!result) return fail(run, deps, `Testing no ha podido usar la IA: ${reason}`);
+        if (!result) return aiFailed(run, deps, "testing", reason);
         addUsage("testing", result.motor, result.tokensIn, result.tokensOut);
         criterios = task.criteria.map((c, i) => {
           const r = result.data.criterios[i];
@@ -326,6 +328,22 @@ async function finish(
   }
   await store.patchRun(run.id, { status: "completada", finished: true });
   return { status: "completada", done: true };
+}
+
+/**
+ * Fallo puntual de la IA a mitad de una ejecución (respuesta cortada, JSON no válido, modelo lento…).
+ * La tarea se queda como estaba y el siguiente paso lo vuelve a intentar; solo se detiene la
+ * ejecución tras MAX_AI_RETRIES fallos seguidos del mismo agente.
+ */
+async function aiFailed(run: RunRow, deps: Deps, id: AgentId, reason: string): Promise<{ status: RunStatus; done: boolean }> {
+  const nombre = id === "develop" ? "Develop" : "Testing";
+  const fallos = (run.agents[id].fallosSeguidos ?? 0) + 1;
+  if (fallos >= MAX_AI_RETRIES) return fail(run, deps, `${nombre} no ha podido usar la IA tras ${fallos} intentos: ${reason}`);
+  const agents = run.agents;
+  agents[id] = { ...agents[id], fallosSeguidos: fallos, estado: "esperando", actividad: `La IA no respondió bien; reintentando (${fallos}/${MAX_AI_RETRIES - 1})` };
+  await deps.store.addEvent(run.id, { agent: "sistema", kind: "reintento", message: `La IA de ${nombre} no ha dado una respuesta válida (${reason.slice(0, 200)}). Se reintenta el mismo paso (${fallos}/${MAX_AI_RETRIES - 1}).` });
+  await deps.store.patchRun(run.id, { agents });
+  return { status: run.status, done: false };
 }
 
 async function fail(run: RunRow, deps: Deps, message: string): Promise<{ status: RunStatus; done: boolean }> {

@@ -82,6 +82,7 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 | CA17 (R10) | El repositorio no contiene claves, contraseñas ni cadenas de conexión | Secretos solo en variables de entorno de Vercel / `.env.local` (ignorado); revisión del repositorio antes de publicarlo |
 | CA18 (R8) | Una petición en curso se puede cancelar: los agentes se detienen, la web publicada no cambia y un paso que siguiera en marcha no puede reactivarla | `engine.test.ts` → «cancelar una petición…»; botón «Cancelar» en la interfaz; `POST /api/runs/:id/cancel` |
 | CA19 (R8) | Mientras la IA razona o escribe, la tarjeta del agente muestra la fase y el tiempo transcurrido | `llm.test.ts` → «informa de la fase de razonamiento…»; actividad «Razonando con <modelo>… N s» |
+| CA20 (R3, D7) | Un fallo puntual de la IA a mitad de una petición (respuesta cortada, JSON no válido) no la detiene: el agente reintenta el mismo paso hasta 3 veces seguidas sin gastar intentos de la tarea; si sigue fallando, la petición termina con el motivo | `engine.test.ts` → «fallos puntuales de la IA…» (2 tests); fallo detectado en una prueba real en producción |
 
 ## 7. Fuera de alcance
 
@@ -92,7 +93,7 @@ Orquestador: revisión final → publica los cambios en la web del usuario
 ## 8. Comprobación de que se cumple la especificación
 
 ```bash
-npm test             # 18 tests (CA1–CA5, CA8–CA12, CA18, CA19)
+npm test             # 20 tests (CA1–CA5, CA8–CA12, CA18–CA20)
 npm run typecheck && npm run lint && npm run build
 ```
 

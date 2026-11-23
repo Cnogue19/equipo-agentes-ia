@@ -13,6 +13,8 @@ export type AgentState = {
   llamadas: number;
   tokensEntrada: number;
   tokensSalida: number;
+  /** Fallos seguidos de la IA en este agente (se reintenta hasta MAX_AI_RETRIES). */
+  fallosSeguidos?: number;
 };
 
 export type AgentsState = Record<AgentId, AgentState>;
@@ -68,6 +70,8 @@ export type RunEvent = {
 };
 
 export const MAX_ATTEMPTS = 4;
+/** Veces seguidas que se reintenta una llamada de IA fallida antes de detener la ejecución. */
+export const MAX_AI_RETRIES = 3;
 
 export function initialAgents(): AgentsState {
   const base = (): AgentState => ({

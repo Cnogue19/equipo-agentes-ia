@@ -71,6 +71,40 @@ describe("equipo de agentes en modo simulado", () => {
   });
 });
 
+describe("fallos puntuales de la IA a mitad de una petición", () => {
+  const plan = { resumen: "", tareas: [{ titulo: "t", descripcion: "Crear contacto.html", criterios: ["c"] }] };
+  const dev = { resumen: "Hecho", archivos: [{ ruta: "contacto.html", contenido: templateFiles()["index.html"] }] };
+  const ok = (data: unknown) => ({ reason: "", result: { motor: "f", tokensIn: 1, tokensOut: 1, data } });
+
+  it("si Testing falla dos veces (p. ej. respuesta cortada por max_tokens), reintenta y termina", async () => {
+    const m = memoryStore("Añade contacto", templateFiles(), "ia");
+    let testingCalls = 0;
+    const llm = (async (req: LlmRequest<unknown>) => {
+      if (req.system.includes("ORQUESTADOR")) return ok(plan);
+      if (req.system.includes("DEVELOP")) return ok(dev);
+      testingCalls++;
+      if (testingCalls <= 2) return { result: null, reason: "La respuesta se cortó por max_tokens" };
+      return ok({ observaciones: "", criterios: [{ criterio: "c", cumple: true, motivo: "ok" }] });
+    }) as unknown as Deps["llm"];
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(r.status).toBe("completada");
+    expect(testingCalls).toBe(3);
+    expect(m.events.filter((e) => e.kind === "reintento")).toHaveLength(2);
+    expect(m.tasks[0].attempts).toBe(1); // los reintentos de la IA no gastan intentos de la tarea
+    expect(m.run.agents.testing.fallosSeguidos).toBe(0);
+  });
+
+  it("si Develop falla 3 veces seguidas, la petición se detiene con el motivo", async () => {
+    const m = memoryStore("Añade contacto", templateFiles(), "ia");
+    const llm = (async (req: LlmRequest<unknown>) =>
+      req.system.includes("ORQUESTADOR") ? ok(plan) : { result: null, reason: "modelo caído" }) as unknown as Deps["llm"];
+    const r = await runToEnd({ store: m.store, llm, sleep: noSleep });
+    expect(r.status).toBe("fallida");
+    expect(m.run.error).toContain("tras 3 intentos");
+    expect(m.tasks[0].attempts).toBe(1);
+  });
+});
+
 describe("cancelar una petición", () => {
   it("detiene la ejecución, no publica cambios y un paso posterior no la reactiva", async () => {
     const m = memoryStore("Añade una página de contacto a esta web", templateFiles(), "simulado");
